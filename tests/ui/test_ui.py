@@ -10,7 +10,7 @@ Aufruf:   python3 tests/ui/test_ui.py
 Voraussetzung: pip install playwright  (und: python3 -m playwright install chromium, falls kein Chrome da ist)
 Ausgabe:  OK/FAIL je Prüfung, Screenshots in tests/ui/out/, Exit-Code 1 bei Fehlern.
 """
-import functools, http.server, math, os, re, shutil, socket, sys, tempfile, threading, traceback, urllib.parse
+import functools, http.server, json, math, os, re, shutil, socket, sys, tempfile, threading, traceback, urllib.parse
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -587,6 +587,108 @@ def main():
                 check('Fraktions-Vorschläge Desktop: Tastatur (Pfeil + Enter) wählt weiter', chips() == 2)
             ctx.close()
 
+        # ================= 11. Titelbild (seit 2.10) =================
+        def cover():
+            import base64
+            ctx = context(); pg = page(ctx)
+            card = lambda name: pg.locator(f'.board-card:has(h3:text-is("{name}"))')
+            check('Titelbild: Knopf nur auf eigener Board-Karte, anfangs kein Bild', card('Testprojekt').locator('.cover-btn').count() == 1 and card('Testprojekt').locator('img.board-cover').count() == 0)
+            card('Testprojekt').locator('.cover-btn').click(); pg.wait_for_timeout(300)
+            check('Titelbild: Dialog ohne Bild', pg.locator('.modal h2').inner_text() == 'Titelbild' and 'Noch kein Titelbild' in pg.inner_text('.modal') and not pg.locator('.modal button:has-text("Entfernen")').is_visible())
+            pg.set_input_files('.modal input[type=file]', {'name': 'c.png', 'mimeType': 'image/png', 'buffer': PNG}); pg.wait_for_timeout(800)
+            cp = pg.evaluate(f"window.__db.boards.find(b => b.id === '{BID}').cover_path") or ''
+            check('Titelbild: hochgeladen und gespeichert (eigener Ordner, cover-<uuid>.jpg)', re.fullmatch(BID + r'/cover-[0-9a-f-]{36}\.jpg', cp) is not None, cp)
+            check('Titelbild: Vorschau + „Entfernen“ im Dialog', pg.locator('.modal .cover-preview img').count() == 1 and pg.locator('.modal button:has-text("Entfernen")').is_visible())
+            pg.locator('.modal button:has-text("Fertig")').click(); pg.wait_for_timeout(700)
+            img = card('Testprojekt').locator('img.board-cover')
+            check('Titelbild: erscheint auf der Board-Karte (signierte Adresse)', img.count() == 1 and cp in urllib.parse.unquote(img.get_attribute('src') or ''))
+            card('Testprojekt').locator('.cover-btn').click(); pg.wait_for_timeout(300)
+            pg.set_input_files('.modal input[type=file]', {'name': 'd.png', 'mimeType': 'image/png', 'buffer': PNG}); pg.wait_for_timeout(800)
+            cp2 = pg.evaluate(f"window.__db.boards.find(b => b.id === '{BID}').cover_path") or ''
+            check('Titelbild: ersetzen gibt neue Datei', cp2 and cp2 != cp)
+            pg.locator('.modal button:has-text("Entfernen")').click(); pg.wait_for_timeout(500)
+            check('Titelbild: entfernen', pg.evaluate(f"window.__db.boards.find(b => b.id === '{BID}').cover_path") is None and 'Noch kein Titelbild' in pg.inner_text('.modal'))
+            pg.keyboard.press('Escape'); pg.wait_for_timeout(700)
+            check('Titelbild: nach Entfernen kein Bild auf der Karte', card('Testprojekt').locator('img.board-cover').count() == 0)
+            # Besucher sieht das Titelbild eines geteilten Boards, kann es aber nicht ändern
+            pg.evaluate(f"""(() => {{ const b = window.__db.boards.find(x => x.id === '{BID2}'); b.cover_path = '{BID2}/cover-11111111-2222-4333-8444-555555555555.jpg';
+                window.__db.board_visits.push({{ user_id: 'u-owner', board_id: '{BID2}', visited_at: '2026-11-22T10:00:00Z' }}); }})()""")
+            pg.goto(U + f'#/b/{BID}/netz'); pg.wait_for_timeout(400); pg.goto(U + '#/'); pg.wait_for_timeout(700)
+            sh = pg.locator('.board-card.shared')
+            check('Titelbild: auch bei „Mit mir geteilt“ sichtbar, dort ohne Ändern-Knopf', sh.locator('img.board-cover').count() == 1 and sh.locator('.cover-btn').count() == 0)
+            # Import mit Titelbild
+            doc = {'format': 'charakter-netz', 'version': 2, 'name': 'Import mit Titelbild', 'cover': {'src': 'data:image/png;base64,' + base64.b64encode(PNG).decode()},
+                   'factions': [], 'characters': [{'id': 'a', 'name': 'A', 'x': 0, 'y': 0}], 'links': []}
+            pg.set_input_files('input[type=file][accept*="json"]', {'name': 'x.json', 'mimeType': 'application/json', 'buffer': json.dumps(doc).encode()}); pg.wait_for_timeout(1500)
+            nb = pg.evaluate("window.__db.boards.find(b => b.name === 'Import mit Titelbild')") or {}
+            check('Titelbild: Import übernimmt das Titelbild', re.fullmatch(re.escape(nb.get('id', '-')) + r'/cover-[0-9a-f-]{36}\.jpg', nb.get('cover_path') or '') is not None, nb.get('cover_path'))
+            ctx.close()
+            ctx = context(**MOBILE); pg = page(ctx)
+            pg.locator('.board-card:has(h3:text-is("Testprojekt")) .cover-btn').click(); pg.wait_for_timeout(300)
+            check('Titelbild Handy: Dialog passt in die Breite', pg.evaluate('document.documentElement.scrollWidth') <= 375 and pg.locator('.modal .cover-preview').is_visible())
+            ctx.close()
+
+        # ================= 12. Offener Dialog sperrt den Hintergrund (seit 2.10) =================
+        def modal_lock(mobile):
+            tag = 'Handy' if mobile else 'Desktop'
+            ctx = context(**MOBILE) if mobile else context(); pg = page(ctx)
+            pg.evaluate(f"""for (let i = 0; i < 12; i++) window.__db.factions.push({{ id: 'fy' + i, board_id: '{BID}', name: 'Gruppe ' + String(i).padStart(2, '0'), color: '#996633' }});""")
+            pg.goto(U + f'#/b/{BID}/netz'); pg.wait_for_timeout(800)
+            vp = lambda: pg.evaluate("document.querySelector('.canvas svg > g').getAttribute('transform')")
+            pg.locator('.node[data-char="c2"]').click(); pg.wait_for_timeout(300)
+            pg.locator('.modal button:has-text("Bearbeiten")').click(); pg.wait_for_timeout(300)
+            t0 = vp()
+            check(f'Dialog {tag}: Hintergrund gesperrt (Klasse modal-open, Seite scrollt nicht)', pg.evaluate("document.documentElement.classList.contains('modal-open') && getComputedStyle(document.body).overflow === 'hidden'"))
+            moved = lambda: pg.evaluate('[document.scrollingElement.scrollTop, Math.round(window.visualViewport.pageTop)]')
+            if mobile:
+                cdp = ctx.new_cdp_session(pg)
+                touch = lambda t, x=0, y=0: cdp.send('Input.dispatchTouchEvent', {'type': t, 'touchPoints': [] if t == 'touchEnd' else [{'x': x, 'y': y}]})
+                def swipe(x, y, dy):
+                    touch('touchStart', x, y)
+                    for i in range(1, 13): touch('touchMove', x, y + dy * i / 12); pg.wait_for_timeout(16)
+                    touch('touchEnd'); pg.wait_for_timeout(300)
+                swipe(187, 30, 300); swipe(187, 30, -300)  # auf dem abgedunkelten Hintergrund wischen
+                check('Dialog Handy: Wischen auf dem Hintergrund bewegt nichts', vp() == t0 and moved() == [0, 0], [vp(), t0, moved()])
+                bb = pg.locator('.modal-body').bounding_box()
+                for _ in range(3): swipe(bb['x'] + bb['width'] / 2, bb['y'] + bb['height'] - 20, -400)
+                check('Dialog Handy: Formular scrollt bis zum Ende, Hintergrund bleibt stehen', pg.locator('.modal-body').evaluate('e => e.scrollHeight <= e.clientHeight || e.scrollTop > 0') and vp() == t0 and moved() == [0, 0], [moved(), pg.locator('.modal-body').evaluate('e => [e.scrollHeight, e.clientHeight, e.scrollTop]')])
+                pg.locator('.modal .chip-input').click(); pg.wait_for_timeout(300)
+                body0 = pg.locator('.modal-body').evaluate('e => e.scrollTop')
+                lb = pg.locator('.modal .suggest').bounding_box()
+                for _ in range(3): swipe(lb['x'] + lb['width'] / 2, lb['y'] + lb['height'] - 15, -300)
+                check('Dialog Handy: Wischen über das Ende der Vorschläge hinaus bewegt das Formular nicht', pg.locator('.modal .suggest').evaluate('e => e.scrollTop') > 0
+                      and abs(pg.locator('.modal-body').evaluate('e => e.scrollTop') - body0) <= 1 and pg.locator('.modal .picker .chip').count() == 0, [body0, pg.locator('.modal-body').evaluate('e => e.scrollTop')])
+                fs = pg.locator('.modal .chip-input').evaluate('e => parseFloat(getComputedStyle(e).fontSize)')
+                check('Dialog Handy: Eingabefelder 16 px (iPhone zoomt die Seite sonst heran)', fs >= 16 and pg.locator('.modal input[type=text]').first.evaluate('e => parseFloat(getComputedStyle(e).fontSize)') >= 16, fs)
+            else:
+                pg.mouse.move(40, 400); pg.mouse.wheel(0, 600); pg.wait_for_timeout(300)
+                check('Dialog Desktop: Mausrad auf dem Hintergrund zoomt das Netz nicht', vp() == t0)
+            pg.keyboard.press('Escape'); pg.wait_for_timeout(150)
+            if pg.locator('.modal').count(): pg.keyboard.press('Escape'); pg.wait_for_timeout(150)  # erstes Escape schließt nur die Vorschläge
+            check(f'Dialog {tag}: nach dem Schließen ist der Hintergrund wieder frei', not pg.evaluate("document.documentElement.classList.contains('modal-open')") and pg.locator('.modal').count() == 0)
+            ctx.close()
+
+        # ================= 13. Handy: Netz lesbar, Bedienelemente groß genug (seit 2.10) =================
+        def mobile_size():
+            ctx = context(**MOBILE); pg = page(ctx)
+            pg.goto(U + f'#/b/{BID}/netz'); pg.wait_for_timeout(900)
+            k = lambda: float(re.findall(r'scale\(([-\d.]+)\)', pg.evaluate("document.querySelector('.canvas svg > g').getAttribute('transform')"))[0])
+            check(f'Handy-Netz: Start-Zoom lesbar (≥ 0,6 statt alles winzig, ist {k():.2f})', k() >= 0.6 - 1e-6)
+            cr = pg.locator('.canvas').bounding_box(); nb = pg.locator('.node[data-char="c0"] .node-bg').bounding_box()
+            check('Handy-Netz: wichtigster Charakter (meiste Verbindungen) im Bild und gut antippbar', cr['x'] <= nb['x'] and nb['x'] + nb['width'] <= cr['x'] + cr['width'] and nb['width'] >= 36, nb)
+            nh = pg.locator('.node[data-char="c0"] .node-name').evaluate('e => e.getBoundingClientRect().height')
+            check(f'Handy-Netz: Namen lesbar (Höhe {nh:.1f} px ≥ 11)', nh >= 11)
+            pg.get_by_role('button', name='Alles zeigen').click(); pg.wait_for_timeout(300)
+            inside = pg.evaluate("""() => { const r = document.querySelector('.canvas').getBoundingClientRect(); return [...document.querySelectorAll('.node .node-bg')].every(n => { const b = n.getBoundingClientRect(); return b.left >= r.left - 1 && b.right <= r.right + 1 && b.top >= r.top - 1 && b.bottom <= r.bottom + 1; }); }""")
+            check('Handy-Netz: „Alles zeigen“ passt weiterhin alles ein', inside and k() < 0.6)
+            hs = pg.evaluate("[...document.querySelectorAll('.toolbar .btn')].filter(b => b.offsetParent).map(b => b.getBoundingClientRect().height)")
+            check(f'Handy: Knöpfe groß genug zum Antippen (kleinster {min(hs):.0f} px ≥ 38)', hs and min(hs) >= 38, hs)
+            fs = pg.evaluate('parseFloat(getComputedStyle(document.body).fontSize)')
+            check('Handy: Grundschrift 16 px', fs >= 16, fs)
+            check('Handy: Netz-Ansicht ohne seitliches Scrollen', pg.evaluate('document.documentElement.scrollWidth') <= 375)
+            pg.screenshot(path=os.path.join(OUT, 'handy_netz_lesbar.png'))
+            ctx.close()
+
         section('Grundfunktionen', basics)
         section('Japanisch', japanese)
         section('Einladung', invite)
@@ -599,6 +701,10 @@ def main():
         section('Ersteller übertragen Handy', transfer_owner, True)
         section('Fraktions-Vorschläge Desktop', faction_suggest, False)
         section('Fraktions-Vorschläge Handy', faction_suggest, True)
+        section('Titelbild', cover)
+        section('Dialog sperrt Hintergrund Desktop', modal_lock, False)
+        section('Dialog sperrt Hintergrund Handy', modal_lock, True)
+        section('Handy-Größen', mobile_size)
         section('Updates', updates)
         b.close()
     srv.shutdown()

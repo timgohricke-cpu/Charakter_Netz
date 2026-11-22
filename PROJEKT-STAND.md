@@ -1,4 +1,4 @@
-# Charakter-Netz – Projektstand (Version 2.9)
+# Charakter-Netz – Projektstand (Version 2.10)
 
 Diese Datei beschreibt den aktuellen Stand, damit die Arbeit in einem neuen Chat nahtlos weitergehen kann.
 **Hier stehen keine Passwörter oder geheimen Schlüssel – und das soll so bleiben (das Repo ist öffentlich).**
@@ -26,7 +26,7 @@ Statische PWA ohne Build-Schritt und ohne externe Bibliotheken zur Laufzeit, geh
 | `config.js` | Supabase-URL, öffentlicher *publishable key*, `EMAIL_DOMAIN` |
 | `app.js` | Gesamte App (ca. 1600 Zeilen, ein IIFE, kein Framework) |
 | `style.css` | Design inkl. Hell-/Dunkelmodus über CSS-Variablen (`:root` / `:root[data-theme=light]`) |
-| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v9`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.9) |
+| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v10`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.10) |
 | `vendor/supabase.js` | `@supabase/supabase-js` 2.119.2, lokal mit esbuild gebündelt (IIFE, global `supabase`) |
 | `supabase/schema.sql` | Komplettes Datenbank-Skript; **idempotent** (kann jederzeit erneut ausgeführt werden) |
 | `manifest.webmanifest`, Icons | Installation als App |
@@ -40,7 +40,7 @@ npx esbuild entry.js --bundle --minify --format=iife --global-name=supabase --ta
 
 ### Datenbank (Supabase / Postgres)
 - `profiles` (id = auth.users.id, `username`, eindeutig über `lower(username)`), wird per Trigger beim Registrieren angelegt
-- `boards` (owner_id, name, map_path/map_w/map_h, **share_token** – nur über Funktion lesbar)
+- `boards` (owner_id, name, map_path/map_w/map_h, **cover_path** (Titelbild, seit 2.10; Prüfregel: nur `<board-id>/cover-<uuid>.jpg`), **share_token** – nur über Funktion lesbar)
 - `characters` (name, short, info, place, image_path, x, y, map_x, map_y, **dead**)
 - `links` (a, b, short, long) – beide Charaktere müssen zum selben Board gehören
 - `factions` (name, color `#rrggbb`) und `character_factions` (Zuordnung, mehrere je Charakter, `position` = Reihenfolge)
@@ -65,7 +65,10 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 
 ## Funktionen
 **Konto:** Registrieren, Anmelden, „Angemeldet bleiben“ (an: localStorage, aus: sessionStorage), Abmelden, Passwort ändern (mit altem Passwort), Konto löschen (mit Benutzername + Passwort, löscht Bilder, Boards, alles).
-**Startseite:** „Meine Boards“ (Teilen, Umbenennen, Exportieren, Löschen), „Mit mir geteilt“ (nur ansehen, aus Liste entfernen), Import, Banner zur Übernahme lokaler V1-Boards.
+**Titelbild (seit 2.10):** Auf der eigenen Board-Karte „🖼 Titelbild“ → Bild wählen (wird auf max. 1600 px verkleinert, als JPEG neu kodiert, Datei `<board-id>/cover-<uuid>.jpg`), ersetzen oder entfernen (alte Datei wird gelöscht). Erscheint oben auf der Board-Karte (16:9) – auch bei Besuchern unter „Mit mir geteilt“. Export/Import enthalten das Titelbild.
+**Dialoge sperren den Hintergrund (seit 2.10):** Solange ein Dialog offen ist (`html.modal-open`), scrollt/zoomt nichts dahinter; Dialog-Inhalt und Vorschlagslisten reichen das Wischen nicht an den Hintergrund weiter (`overscroll-behavior: contain`); Viewport `interactive-widget=resizes-content` (Tastatur verschiebt die Seite nicht).
+**Handy-Größen (seit 2.10, ≤ 720 px oder Touch ≤ 1024 px):** Grundschrift 16 px, Eingabefelder 16 px (das iPhone zoomt sonst beim Antippen heran), Knöpfe mindestens 38–42 px hoch; Netz startet auf dem Handy mit Zoom ≥ 0,6 um den Charakter mit den meisten Verbindungen (statt alles winzig einzupassen, „Alles zeigen“ passt weiterhin alles ein), Namen auf dem Handy mindestens ca. 12 px.
+**Startseite:** „Meine Boards“ (Teilen, Titelbild, Umbenennen, Exportieren, Löschen), „Mit mir geteilt“ (nur ansehen, aus Liste entfernen), Import, Banner zur Übernahme lokaler V1-Boards.
 **Ersteller übertragen (seit 2.8, nur Ersteller):** Im Teilen-Dialog unter „Mitglieder – wer hat Zugriff?“ steht oben man selbst („👑 Ersteller (du)“), darunter jeder Besucher mit Knopf „👑 Zum Ersteller machen“. Rückfrage mit Häkchen „Ich habe verstanden …“ (erst dann klickbar), „Abbrechen“ führt zurück zum Teilen-Dialog. Der neue Ersteller muss das Board schon über den Link geöffnet haben (steht in `board_visits`). Danach: neuer Ersteller kann alles (bearbeiten, teilen, Bilder, löschen) und steht nicht mehr in der Besucherliste; der bisherige Ersteller wird Besucher (Nur-Lesen, „Mit mir geteilt“) und kann es nicht selbst zurückholen. Bilder, Freigabe-Link und übrige Besucher bleiben. Der Server prüft alles (`transfer_board_owner`): Fehler `not_owner`, `invalid_new_owner`, `new_owner_no_access`, `limit_boards_new_owner` (200 Boards) → deutsche Meldungen.
 **Teilen / Einladen (nur Ersteller):** Knopf „📤 Board teilen“ in der Kopfleiste und „📤 Einladen“ auf der Board-Karte. Dialog mit „Teilen …“ (Teilen-Menü des Geräts: WhatsApp, Discord, Telegram, Mail … – `navigator.share`) und direkten Knöpfen WhatsApp, Telegram, Discord (Link kopieren + Discord öffnen, Discord hat keinen Teilen-Link), E-Mail, SMS (nur Handy), Link kopieren; Besucherliste; Link erneuern (optional alle Besucher entfernen). Besucher sehen keinen Teilen-Knopf, der Server gibt den Schlüssel nur dem Ersteller.
 **App weiterempfehlen (alle):** 📣 in der Kopfleiste (Startseite und Anmeldeseite) teilt nur den Link zur App, ohne Board.
@@ -105,7 +108,7 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 
 ## Tests
 **`bash tests/run_all.sh`** – statische Prüfungen, Datenbank (lokales Postgres, frisch + Upgrade + doppelt) und Oberfläche (Chrome headless mit nachgebautem Supabase). Am Ende muss „ALLE TESTS BESTANDEN“ stehen. Details und Live-Prüfliste: `tests/README.md`.
-Stand 22.11.2026 (Version 2.9): 24 statische + 318 Datenbank- + 175 Oberflächen-Prüfungen (517), alle bestanden.
+Stand 22.11.2026 (Version 2.10): 24 statische + 438 Datenbank- + 202 Oberflächen-Prüfungen (664), alle bestanden.
 
 ## Testboards
 - `tests/data/silber.json` (erzeugt von `tests/data/make_silber.py`): „Silber – Die Trilogie der Träume“ (Kerstin Gier), Stand Ende Band 3: 81 Charaktere (auch Nebenfiguren ohne Verbindung, z. B. Lehrkräfte), 167 Verbindungen (feste Fakten wie Familie bleiben, Beziehungen zeigen den letzten Stand, Verlauf in der langen Beschreibung), 15 Fraktionen, viele Mehrfach-Fraktionen – über „Importieren“ in ein Konto laden (liegt im Konto test_ersteller). Gedacht für „✨ Anordnen“/Inseln und als Board für „Ersteller übertragen“ (test_ersteller → test_besucher und zurück). Nebenfiguren, über die die Quellen wenig sagen, sind ausdrücklich so beschrieben.
@@ -117,6 +120,6 @@ Stand 22.11.2026 (Version 2.9): 24 statische + 318 Datenbank- + 175 Oberflächen
 - PostgREST-Einbettungen zwischen `boards` und `profiles` brauchen den Fremdschlüsselnamen (`profiles!boards_owner_id_fkey`), weil es zwei Wege gibt.
 - `boards` hat spaltenweise Rechte: nie `select('*')` auf `boards` verwenden.
 - Commit-Nachrichten auf Deutsch.
-- **Schreibzugriff:** Claude hatte bisher keine Schreibrechte auf das Repo. Änderungen werden als ZIP geliefert; Tim lädt sie über https://github.com/timgohricke-cpu/Charakter_Netz/upload/main hoch (Ordnerstruktur beibehalten). SQL immer **vor** den App-Dateien ausführen, wenn die neue App das neue SQL braucht.
+- **Schreibzugriff:** Seit 22.11.2026 schreibt Claude mit Tims Zustimmung direkt ins Repo (GitHub-Verbindung der Sitzung, Commits auf `main`, Ordnerstruktur sauber). Gibt es keine Verbindung: ZIP liefern; beim Hochladen über die GitHub-Webseite **ganze Ordner** ins Fenster ziehen, sonst landen Dateien im Hauptordner. SQL führt immer Tim aus – **vor** den App-Dateien, wenn die neue App das neue SQL braucht (Claude lädt App-Dateien erst danach hoch).
 - Jede Lieferung enthält die aktualisierten Tests (`tests/`) und diese Datei.
 - Lokale Tests: `supabase/schema.sql` gegen Postgres 16 mit nachgebautem `auth`/`storage`-Schema (Rollen anon/authenticated, `auth.uid()` aus `request.jwt.claim.sub`); Oberfläche mit Playwright/Chrome und einem In-Memory-Nachbau des Supabase-Clients.

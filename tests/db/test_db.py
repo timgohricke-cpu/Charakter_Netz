@@ -19,7 +19,7 @@ SCHEMA = os.path.join(ROOT, 'supabase', 'schema.sql')
 MOCK = os.path.join(os.path.dirname(__file__), 'mock_supabase.sql')
 # Frühere veröffentlichte Stände (Commits), von denen ein Upgrade funktionieren muss.
 # Bei jeder Änderung an schema.sql den dann veröffentlichten Commit hier ergänzen.
-UPGRADE_FROM = ['42f3612', 'b4d7683', '624212f']
+UPGRADE_FROM = ['42f3612', 'b4d7683', '624212f', '6773063']
 
 OWNER, VISITOR, STRANGER = ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
                             '33333333-3333-3333-3333-333333333333')
@@ -216,6 +216,16 @@ def suite(db, label):
                       ('Board bearbeiten', f"with u as (update boards set name='B1x', map_path='{bid}/map-1.jpg', map_w=10, map_h=10 where id='{bid}' returning 1) select count(*) from u;")]:
         r = cnt(OWNER, sql)
         check(T(f'Ersteller: {name}'), r == '1', r)
+    # Titelbild (seit 2.10): nur Ersteller, nur eigene Datei "<board>/cover-<uuid>.jpg"
+    cov = f"{bid}/cover-12345678-1234-4123-8123-123456789abc.jpg"
+    check(T('Titelbild: Ersteller setzt es'), cnt(OWNER, f"with u as (update boards set cover_path='{cov}' where id='{bid}' returning 1) select count(*) from u;") == '1')
+    check(T('Titelbild: Besucher sieht es'), cnt(VISITOR, f"select cover_path from boards where id='{bid}';") == cov)
+    r = cnt(VISITOR, f"with u as (update boards set cover_path=null where id='{bid}' returning 1) select count(*) from u;")
+    check(T('Titelbild: Besucher kann es nicht ändern'), r in ('0', 'ERR') and cnt(OWNER, f"select cover_path from boards where id='{bid}';") == cov, r)
+    for name, val in [('fremdes Board', '99999999-9999-4999-8999-999999999999/cover-12345678-1234-4123-8123-123456789abc.jpg'),
+                      ('anderer Dateiname', f'{bid}/p-12345678-1234-4123-8123-123456789abc.jpg'), ('Pfad mit ..', f'{bid}/../x/cover-1.jpg'), ('beliebiger Text', 'https://evil.example/x.jpg')]:
+        check(T(f'Titelbild: abgelehnt ({name})'), cnt(OWNER, f"update boards set cover_path='{val}' where id='{bid}';") == 'ERR')
+    check(T('Titelbild: Ersteller entfernt es'), cnt(OWNER, f"with u as (update boards set cover_path=null where id='{bid}' returning 1) select count(*) from u;") == '1')
     check(T('Ersteller: Fraktion wieder zuordnen'), cnt(OWNER, f"insert into character_factions values ('{bid}', '{C1}', '{F1}', 0);") != 'ERR')
     check(T('Ersteller: Link erneuern + Besucher entfernen'), cnt(OWNER, f"select reset_share_link('{bid}', true) is not null;") == 't')
     check(T('Besucher danach ohne Zugriff'), cnt(VISITOR, 'select count(*) from characters;') == '0')

@@ -26,14 +26,14 @@
   const SB_KEY = String(CFG.SUPABASE_KEY || '');
   const EMAIL_DOMAIN = String(CFG.EMAIL_DOMAIN || 'users.charakter-netz.app');
   const BUCKET = 'board-images';
-  const APP_VERSION = '2.9'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
+  const APP_VERSION = '2.10'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
   const CONFIGURED = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(SB_URL) && SB_KEY.length > 20 && !!window.supabase;
   // Benutzernamen: 2–24 Zeichen, Buchstaben/Ziffern . _ - sowie Japanisch (Hiragana, Katakana, Kanji).
   // Muss zu private.cn_username_ok() in supabase/schema.sql passen.
   const USERNAME_RE = /^[A-Za-z0-9_.\-\u3005-\u3007\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FC-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]{2,24}$/;
   const normUser = (s) => String(s || '').trim().normalize('NFKC');
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const BOARD_COLS = 'id,owner_id,name,map_path,map_w,map_h,created_at,updated_at';
+  const BOARD_COLS = 'id,owner_id,name,map_path,map_w,map_h,cover_path,created_at,updated_at';
   const CHAR_COLS = 'id,name,short,info,place,image_path,x,y,map_x,map_y,dead';
   const FACTION_COLS = 'id,name,color';
   const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -49,6 +49,8 @@
   const VIEWS = ['tabelle', 'netz', 'karte'];
   const $ = (s, r = document) => r.querySelector(s);
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const MOBILE_MIN_K = 0.6; // kleinster Start-Zoom im Netz auf dem Handy
+  const smallScreen = (w = window.innerWidth) => w < 600;
   const uid = () => {
     if (crypto.randomUUID) return crypto.randomUUID();
     const b = crypto.getRandomValues(new Uint8Array(16));
@@ -330,6 +332,7 @@
     const out = {
       id: b.id, name: b.name, ownerId: b.owner_id, ownerName: '', created: b.created_at, updated: b.updated_at,
       map: b.map_path ? { path: b.map_path, w: b.map_w || 1000, h: b.map_h || 500, src: null } : null,
+      coverPath: b.cover_path || null,
       characters: chars.map(charFromRow),
       links: links.map((l) => ({ id: l.id, a: l.a, b: l.b, short: l.short, long: l.long })),
       factions: factions.filter((f) => COLOR_RE.test(f.color)).sort(byName),
@@ -613,6 +616,7 @@
   function closeModal() {
     if (!currentModal) return;
     const cb = currentModal._onClose; currentModal.remove(); currentModal = null;
+    document.documentElement.classList.remove('modal-open'); // Hintergrund wieder frei
     if (cb) cb();
   }
   function modal(title, body, actions = [], opts = {}) {
@@ -626,6 +630,7 @@
     back.dataset.locked = opts.locked ? '1' : '';
     document.body.append(back);
     currentModal = back;
+    document.documentElement.classList.add('modal-open'); // Hintergrund sperren: nur der Dialog lässt sich bewegen
     const f = box.querySelector('.modal-body input:not([type=file]):not([type=checkbox]):not([readonly]), .modal-body textarea');
     if (f) f.focus();
     return box;
@@ -844,7 +849,7 @@
     try {
       [mine, shared, local] = await Promise.all([
         q(sb.from('boards').select(BOARD_COLS + ',characters(count),links(count)').eq('owner_id', me.id).order('updated_at', { ascending: false })),
-        q(sb.from('board_visits').select('board_id,visited_at,board:boards!board_visits_board_id_fkey(id,name,updated_at,owner:profiles!boards_owner_id_fkey(username))').eq('user_id', me.id).order('visited_at', { ascending: false })),
+        q(sb.from('board_visits').select('board_id,visited_at,board:boards!board_visits_board_id_fkey(id,name,updated_at,cover_path,owner:profiles!boards_owner_id_fkey(username))').eq('user_id', me.id).order('visited_at', { ascending: false })),
         LocalDB.all(),
       ]);
     } catch (e) {
@@ -855,17 +860,24 @@
     }
     if (seq !== routeSeq) return;
     const count = (x) => (Array.isArray(x) && x[0] ? x[0].count : 0);
+    // Titelbilder (signierte Adressen); Fehler hier sollen die Startseite nicht verhindern
+    let coverSrc = () => null;
+    try { coverSrc = await signUrls([...mine.map((b) => b.cover_path), ...shared.map((v) => v.board && v.board.cover_path)]); } catch { /* ohne Bilder weiter */ }
+    if (seq !== routeSeq) return;
+    const coverImg = (b) => { const src = coverSrc(b.cover_path); return src ? el('img', { class: 'board-cover', src, alt: '', loading: 'lazy', draggable: 'false' }) : null; };
 
     const myList = el('div', { class: 'board-list' });
     if (!mine.length) myList.append(el('p', { class: 'empty', text: 'Noch keine eigenen Boards. Erstelle dein erstes Board!' }));
     for (const b of mine) {
       myList.append(el('div', { class: 'board-card' },
         el('button', { class: 'board-open', type: 'button', onclick: () => go(b.id, 'netz') },
+          coverImg(b),
           el('h3', { text: b.name }),
           el('p', { text: `${count(b.characters)} Charaktere · ${count(b.links)} Verbindungen` }),
           el('small', { text: 'Geändert: ' + new Date(b.updated_at).toLocaleString('de-DE') })),
         el('div', { class: 'board-tools' },
           btn('📤 Einladen', () => shareDialog(b.id, b.name), 'ghost small'),
+          btn('🖼 Titelbild', () => coverDialog(b), 'ghost small cover-btn'),
           btn('Umbenennen', () => askText('Board umbenennen', 'Name', b.name, async (v) => {
             mustAffect(await q(sb.from('boards').update({ name: v }).eq('id', b.id).select('id'))); showHome();
           }), 'ghost small'),
@@ -882,6 +894,7 @@
       const b = v.board;
       shList.append(el('div', { class: 'board-card shared' },
         el('button', { class: 'board-open', type: 'button', onclick: () => go(b.id, 'netz') },
+          coverImg(b),
           el('h3', { text: b.name }),
           el('p', { text: 'von ' + ((b.owner && b.owner.username) || 'unbekannt') + ' · nur ansehen' }),
           el('small', { text: 'Zuletzt besucht: ' + new Date(v.visited_at).toLocaleString('de-DE') })),
@@ -906,6 +919,43 @@
         el('div', { class: 'home-head' }, el('h1', { text: 'Mit mir geteilt' })),
         shList,
         el('p', { class: 'note', text: 'Deine Boards werden in deinem Konto gespeichert. Nur du kannst sie bearbeiten. Wer deinen Freigabe-Link hat und angemeldet ist, kann sie ansehen.' })));
+  }
+  // Titelbild eines eigenen Boards wählen / ändern / entfernen (Datei "<board-id>/cover-<uuid>.jpg", alte Datei wird gelöscht)
+  function coverDialog(b) {
+    let path = b.cover_path || null; let changed = false;
+    const preview = el('div', { class: 'cover-preview' });
+    const show = async () => {
+      let src = null;
+      if (path) { try { src = (await signUrls([path]))(path); } catch { src = null; } }
+      preview.replaceChildren(src ? el('img', { src, alt: 'Titelbild' }) : el('span', { class: 'muted', text: 'Noch kein Titelbild' }));
+      rm.hidden = !path;
+    };
+    const setCover = async (p) => {
+      const old = path;
+      mustAffect(await q(sb.from('boards').update({ cover_path: p }).eq('id', b.id).select('id')));
+      path = p; b.cover_path = p; changed = true;
+      if (old && old !== p) await removeImages([old]);
+      await show();
+    };
+    const pickBtn = el('label', { class: 'btn primary' }, '📷 Bild wählen');
+    const file = el('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onchange: () => {
+      const f = file.files[0]; file.value = '';
+      if (!f) return;
+      busy(pickBtn, async () => {
+        const r = await readImage(f, 1600, 0.85);
+        const p = await uploadImage(b.id, r.blob, 'cover-');
+        try { await setCover(p); } catch (e) { await removeImages([p]); throw e; }
+        toast('Titelbild gespeichert.');
+      }).catch((e) => toast(errMsg(e)));
+    } });
+    pickBtn.append(file);
+    const rm = btn('Entfernen', () => busy(rm, async () => { await setCover(null); toast('Titelbild entfernt.'); }).catch((e) => toast(errMsg(e))), 'ghost danger');
+    modal('Titelbild', el('div', { class: 'form' },
+      el('p', { class: 'muted', text: `Das Bild erscheint auf der Karte von „${b.name}“ – auch bei allen, mit denen du das Board teilst.` }),
+      preview, el('div', { class: 'row' }, pickBtn, rm)),
+    [btn('Fertig', closeModal, 'primary')]);
+    currentModal._onClose = () => { if (changed) showHome(); };
+    show();
   }
   function newBoard() {
     askText('Neues Board', 'Name des Boards', '', async (name) => {
@@ -1035,9 +1085,10 @@
       return blobToDataUrl(data);
     };
     const map = b.map ? { src: await dl(b.map.path), w: b.map.w, h: b.map.h } : null;
+    const cover = b.coverPath ? await dl(b.coverPath) : null;
     const characters = [];
     for (const c of b.characters) characters.push({ id: c.id, name: c.name, short: c.short, info: c.info, image: await dl(c.imagePath), place: c.place, x: c.x, y: c.y, mapPos: c.mapPos, factions: c.factionIds, dead: c.dead });
-    const out = { format: 'charakter-netz', version: 2, id: b.id, name: b.name, created: Date.parse(b.created), updated: Date.parse(b.updated), map: map && map.src ? map : null, factions: b.factions, characters, links: b.links };
+    const out = { format: 'charakter-netz', version: 2, id: b.id, name: b.name, created: Date.parse(b.created), updated: Date.parse(b.updated), map: map && map.src ? map : null, cover: cover ? { src: cover } : null, factions: b.factions, characters, links: b.links };
     const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
     const a = el('a', { href: URL.createObjectURL(blob), download: (b.name.replace(/[^\p{L}\p{N}\-_ ]+/gu, '').trim() || 'board') + '.json' });
     document.body.append(a); a.click(); a.remove();
@@ -1077,7 +1128,8 @@
       .map((l) => ({ id: uid(), a: idMap.get(l.a), b: idMap.get(l.b), short: str(l.short, 120).trim() || '…', long: str(l.long, 20000) }))
       .filter((l) => { const k = [l.a, l.b].sort().join(); if (seen.has(k)) return false; seen.add(k); return true; });
     const map = o.map && img(o.map.src) ? { src: o.map.src } : null;
-    return { name: str(o.name, 100).trim() || 'Importiertes Board', map, factions, characters, links };
+    const cover = o.cover && img(o.cover.src) ? { src: o.cover.src } : null;
+    return { name: str(o.name, 100).trim() || 'Importiertes Board', map, cover, factions, characters, links };
   }
   // Ein (geprüftes) Board im Format von Version 1 ins Konto hochladen
   async function uploadBoardObject(o, onProgress) {
@@ -1088,6 +1140,14 @@
         const r = await readImage(dataUrlToBlob(o.map.src), 4096, 0.9);
         const p = await uploadImage(bid, r.blob, 'map-');
         mustAffect(await q(sb.from('boards').update({ map_path: p, map_w: r.w, map_h: r.h }).eq('id', bid).select('id')));
+      }
+      if (o.cover) {
+        let r = null;
+        try { r = await readImage(dataUrlToBlob(o.cover.src), 1600, 0.85); } catch { r = null; } // defektes Bild überspringen
+        if (r) {
+          const p = await uploadImage(bid, r.blob, 'cover-');
+          mustAffect(await q(sb.from('boards').update({ cover_path: p }).eq('id', bid).select('id')));
+        }
       }
       if (o.factions.length) await q(sb.from('factions').insert(o.factions.map((f) => ({ ...f, board_id: bid }))));
       const rows = new Array(o.characters.length);
@@ -1868,7 +1928,9 @@
     function setLod(k) {
       const l = k >= 0.55 ? 'near' : k >= 0.3 ? 'mid' : 'far';
       if (l !== lod) { lod = l; wrap.dataset.lod = l; if (gn.children.length) namesSoon(); }
-      const sc = l === 'near' ? '1' : Math.min(5, Math.max(1, 10 / (13 * k))).toFixed(2);
+      // Namen nie kleiner als ca. 10 px (Handy: 12 px) auf dem Bildschirm – sonst unlesbar
+      const minPx = smallScreen() ? 12 : 10;
+      const sc = l === 'near' && !smallScreen() ? '1' : Math.min(5, Math.max(1, minPx / (13 * k))).toFixed(2);
       if (wrap.style.getPropertyValue('--name-scale') !== sc) { wrap.style.setProperty('--name-scale', sc); if (gn.children.length) namesSoon(); }
     }
     function drawNodes() {
@@ -1978,6 +2040,16 @@
         rubber.style.display = '';
       },
     });
+    // Startansicht: auf dem Handy nicht alles winzig einpassen, sondern lesbar (Zoom ≥ 0,6) um den wichtigsten Charakter
+    function startView() {
+      const r = pz.rect();
+      fit();
+      if (!smallScreen(r.width) || pz.t.k >= MOBILE_MIN_K || !board.characters.length) return;
+      const deg = degrees();
+      const c = board.characters.reduce((m, x) => ((deg.get(x.id) || 0) > (deg.get(m.id) || 0) ? x : m), board.characters[0]);
+      const h = Math.max(120, r.height - 70);
+      pz.set({ x: r.width / 2 - c.x * MOBILE_MIN_K, y: h / 2 - c.y * MOBILE_MIN_K, k: MOBILE_MIN_K });
+    }
     function fit() {
       const r = pz.rect();
       if (!board.characters.length) { pz.set({ x: r.width / 2, y: r.height / 2, k: 1 }); return; }
@@ -2041,7 +2113,7 @@
     wrap.className = 'canvas grid mode-' + netMode;
     drawLinks(); drawNodes(); renderPanel(); applyFocus(); updHint();
     const saved = netT.get(board.id);
-    if (saved) pz.set(saved); else fit();
+    if (saved) pz.set(saved); else startView();
   }
 
   // ---------- Ansicht: Weltkarte ----------

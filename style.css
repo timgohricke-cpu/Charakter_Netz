@@ -388,3 +388,42 @@ button.legend-item[aria-pressed=true] { background: var(--panel-2); box-shadow: 
 .transfer-btn { white-space: nowrap; }
 .btn.danger-bg:disabled { opacity: .45; cursor: not-allowed; }
 .hint-main-faction { display: block; margin-top: 4px; font-size: 12px; }
+
+/* ---------- 2.10: Offene Dialoge sperren den Hintergrund ---------- */
+html { overscroll-behavior: none; }
+html.modal-open, html.modal-open body { overflow: hidden; }
+.backdrop { touch-action: none; overscroll-behavior: contain; }
+.modal { max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); }
+.modal-body { touch-action: pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.modal .check-list, .modal .link-list { overscroll-behavior: contain; }
+
+/* ---------- 2.10: Titelbild ---------- */
+.board-cover { display: block; width: calc(100% + 32px); margin: -16px -16px 12px; aspect-ratio: 16 / 9; object-fit: cover; background: var(--panel-2); }
+.cover-preview { aspect-ratio: 16 / 9; width: 100%; border: 1px dashed var(--line); border-radius: 10px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+.cover-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* ---------- 2.10: Handy – größere Schrift und Bedienelemente ---------- */
+@media (max-width: 720px), (pointer: coarse) and (max-width: 1024px) {
+  body { font-size: 16px; }
+  /* 16 px in Eingabefeldern: Das iPhone zoomt beim Antippen sonst die ganze Seite heran */
+  input, textarea, select { font-size: 16px !important; }
+  .btn { min-height: 42px; padding: 9px 15px; }
+  .btn.small { min-height: 38px; padding: 7px 12px; font-size: 14px; }
+  .icon-btn { font-size: 22px; min-width: 42px; min-height: 42px; }
+  .modal-head h2 { font-size: 19px; }
+  .nav-btn { font-size: 13px; }
+  .nav-ico { font-size: 20px; }
+  .legend { font-size: 14px; }
+  .focus-row { font-size: 15px; padding: 6px 0; }
+  .fchip, .seg button { font-size: 14px; }
+  .check input { width: 22px; height: 22px; }
+  .suggest li { padding: 11px 12px; }
+  .chip { font-size: 14px; }
+  .board-open h3 { font-size: 19px; }
+  .toast { font-size: 15px; }
+}
+@media (max-width: 520px) {
+  .backdrop { padding: 8px; align-items: flex-end; }
+  .modal { max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); border-radius: 16px; }
+  .modal-body { padding: 14px; }
+}
