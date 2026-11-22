@@ -117,14 +117,19 @@ create index if not exists board_visits_board_idx on public.board_visits (board_
 
 -- ---------------------------------------------------------------------
 -- Hilfsfunktionen für die Rechte
+-- Sie liegen im Schema „private“, das die Supabase-API nicht anbietet: Die Rechte-Regeln können sie
+-- benutzen, direkt aufrufen kann sie aber niemand.
 -- ---------------------------------------------------------------------
-create or replace function public.is_board_owner(bid uuid) returns boolean
+create schema if not exists private;
+revoke all on schema private from public, anon;
+grant usage on schema private to authenticated;
+create or replace function private.is_board_owner(bid uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.boards b where b.id = bid and b.owner_id = auth.uid());
 $$;
 
 -- Lesen darf: der Ersteller oder wer das Board über den Freigabe-Link besucht hat
-create or replace function public.can_read_board(bid uuid) returns boolean
+create or replace function private.can_read_board(bid uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select auth.uid() is not null and (
     exists (select 1 from public.boards b where b.id = bid and b.owner_id = auth.uid())
@@ -133,7 +138,7 @@ language sql stable security definer set search_path = '' as $$
 $$;
 
 -- Board-ID aus einem Speicherpfad "<board-id>/<datei>" lesen (ungültig -> null)
-create or replace function public.board_id_from_path(p text) returns uuid
+create or replace function private.board_id_from_path(p text) returns uuid
 language plpgsql immutable set search_path = '' as $$
 begin
   return split_part(p, '/', 1)::uuid;
@@ -282,7 +287,7 @@ grant delete on public.boards to authenticated;
 
 -- Profile: Man sieht nur sich selbst, die Ersteller der Boards, die man ansehen darf,
 -- und die Besucher der eigenen Boards – keine Liste aller Nutzer.
-create or replace function public.can_see_profile(pid uuid) returns boolean
+create or replace function private.can_see_profile(pid uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select auth.uid() is not null and (
     pid = auth.uid()
@@ -292,15 +297,15 @@ language sql stable security definer set search_path = '' as $$
                where v.user_id = pid and b.owner_id = auth.uid())
   );
 $$;
-revoke all on function public.can_see_profile(uuid) from public, anon;
-grant execute on function public.can_see_profile(uuid) to authenticated;
+revoke all on function private.can_see_profile(uuid) from public, anon;
+grant execute on function private.can_see_profile(uuid) to authenticated;
 drop policy if exists profiles_select on public.profiles;
-create policy profiles_select on public.profiles for select to authenticated using (public.can_see_profile(id));
+create policy profiles_select on public.profiles for select to authenticated using (private.can_see_profile(id));
 
 -- Boards
 drop policy if exists boards_select on public.boards;
 create policy boards_select on public.boards for select to authenticated
-  using (owner_id = auth.uid() or public.can_read_board(id));
+  using (owner_id = auth.uid() or private.can_read_board(id));
 drop policy if exists boards_insert on public.boards;
 create policy boards_insert on public.boards for insert to authenticated
   with check (owner_id = auth.uid());
@@ -317,13 +322,13 @@ declare t text;
 begin
   foreach t in array array['characters', 'links', 'factions', 'character_factions'] loop
     execute format('drop policy if exists %1$s_select on public.%1$s', t);
-    execute format('create policy %1$s_select on public.%1$s for select to authenticated using (public.can_read_board(board_id))', t);
+    execute format('create policy %1$s_select on public.%1$s for select to authenticated using (private.can_read_board(board_id))', t);
     execute format('drop policy if exists %1$s_insert on public.%1$s', t);
-    execute format('create policy %1$s_insert on public.%1$s for insert to authenticated with check (public.is_board_owner(board_id))', t);
+    execute format('create policy %1$s_insert on public.%1$s for insert to authenticated with check (private.is_board_owner(board_id))', t);
     execute format('drop policy if exists %1$s_update on public.%1$s', t);
-    execute format('create policy %1$s_update on public.%1$s for update to authenticated using (public.is_board_owner(board_id)) with check (public.is_board_owner(board_id))', t);
+    execute format('create policy %1$s_update on public.%1$s for update to authenticated using (private.is_board_owner(board_id)) with check (private.is_board_owner(board_id))', t);
     execute format('drop policy if exists %1$s_delete on public.%1$s', t);
-    execute format('create policy %1$s_delete on public.%1$s for delete to authenticated using (public.is_board_owner(board_id))', t);
+    execute format('create policy %1$s_delete on public.%1$s for delete to authenticated using (private.is_board_owner(board_id))', t);
   end loop;
 end $$;
 
@@ -331,13 +336,13 @@ end $$;
 -- Neue Besuche entstehen nur über die Funktion open_shared_board (mit gültigem Link).
 drop policy if exists visits_select on public.board_visits;
 create policy visits_select on public.board_visits for select to authenticated
-  using (user_id = auth.uid() or public.is_board_owner(board_id));
+  using (user_id = auth.uid() or private.is_board_owner(board_id));
 drop policy if exists visits_update on public.board_visits;
 create policy visits_update on public.board_visits for update to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 drop policy if exists visits_delete on public.board_visits;
 create policy visits_delete on public.board_visits for delete to authenticated
-  using (user_id = auth.uid() or public.is_board_owner(board_id));
+  using (user_id = auth.uid() or private.is_board_owner(board_id));
 
 -- ---------------------------------------------------------------------
 -- Funktionen für Freigabe-Links und Konto
@@ -369,7 +374,7 @@ create or replace function public.reset_share_link(p_board uuid, p_remove_visito
 language plpgsql security definer set search_path = '' as $$
 declare tok uuid := gen_random_uuid();
 begin
-  if not public.is_board_owner(p_board) then raise exception 'not_owner'; end if;
+  if not private.is_board_owner(p_board) then raise exception 'not_owner'; end if;
   perform set_config('cn.rotate', 'on', true);
   update public.boards set share_token = tok where id = p_board;
   perform set_config('cn.rotate', 'off', true);
@@ -406,24 +411,24 @@ create trigger cn_protect_email before update of email on auth.users
   for each row execute function public.protect_auth_email();
 
 -- Höchstzahl an Bildern je Board (schützt den Speicherplatz vor Missbrauch)
-create or replace function public.board_image_quota_ok(bid uuid) returns boolean
+create or replace function private.board_image_quota_ok(bid uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select bid is not null and (select count(*) from storage.objects o
     where o.bucket_id = 'board-images' and o.name like bid::text || '/%') < 3000;
 $$;
 
-revoke all on function public.is_board_owner(uuid), public.can_read_board(uuid), public.board_id_from_path(text),
+revoke all on function private.is_board_owner(uuid), private.can_read_board(uuid), private.board_id_from_path(text),
   public.open_shared_board(uuid, uuid), public.get_share_token(uuid), public.reset_share_link(uuid, boolean),
   public.delete_my_account(), public.handle_new_user(), public.touch_board(), public.enforce_limits(),
   public.protect_columns(), public.touch_updated_at(), public.cn_email_domain(), public.protect_auth_email(),
-  public.board_image_quota_ok(uuid) from public, anon;
+  private.board_image_quota_ok(uuid) from public, anon;
 -- Interne Funktionen (Trigger, Hilfen) braucht niemand direkt aufzurufen
 revoke all on function public.handle_new_user(), public.touch_board(), public.enforce_limits(),
   public.protect_columns(), public.touch_updated_at(), public.cn_email_domain(), public.protect_auth_email()
   from authenticated;
-grant execute on function public.is_board_owner(uuid), public.can_read_board(uuid), public.board_id_from_path(text),
+grant execute on function private.is_board_owner(uuid), private.can_read_board(uuid), private.board_id_from_path(text),
   public.open_shared_board(uuid, uuid), public.get_share_token(uuid), public.reset_share_link(uuid, boolean),
-  public.delete_my_account(), public.board_image_quota_ok(uuid) to authenticated;
+  public.delete_my_account(), private.board_image_quota_ok(uuid) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- Bilder: privater Storage-Bucket, Pfad "<board-id>/<datei>.jpg"
@@ -435,15 +440,25 @@ on conflict (id) do update set public = false, file_size_limit = excluded.file_s
 
 drop policy if exists cn_images_select on storage.objects;
 create policy cn_images_select on storage.objects for select to authenticated
-  using (bucket_id = 'board-images' and public.can_read_board(public.board_id_from_path(name)));
+  using (bucket_id = 'board-images' and private.can_read_board(private.board_id_from_path(name)));
 drop policy if exists cn_images_insert on storage.objects;
 create policy cn_images_insert on storage.objects for insert to authenticated
-  with check (bucket_id = 'board-images' and public.is_board_owner(public.board_id_from_path(name))
-              and public.board_image_quota_ok(public.board_id_from_path(name)));
+  with check (bucket_id = 'board-images' and private.is_board_owner(private.board_id_from_path(name))
+              and private.board_image_quota_ok(private.board_id_from_path(name)));
 drop policy if exists cn_images_update on storage.objects;
 create policy cn_images_update on storage.objects for update to authenticated
-  using (bucket_id = 'board-images' and public.is_board_owner(public.board_id_from_path(name)))
-  with check (bucket_id = 'board-images' and public.is_board_owner(public.board_id_from_path(name)));
+  using (bucket_id = 'board-images' and private.is_board_owner(private.board_id_from_path(name)))
+  with check (bucket_id = 'board-images' and private.is_board_owner(private.board_id_from_path(name)));
 drop policy if exists cn_images_delete on storage.objects;
 create policy cn_images_delete on storage.objects for delete to authenticated
-  using (bucket_id = 'board-images' and public.is_board_owner(public.board_id_from_path(name)));
+  using (bucket_id = 'board-images' and private.is_board_owner(private.board_id_from_path(name)));
+
+-- ---------------------------------------------------------------------
+-- Aufräumen: frühere Fassungen der Hilfsfunktionen im öffentlichen Schema entfernen
+-- (die Regeln oben verwenden bereits die Fassungen aus „private“)
+-- ---------------------------------------------------------------------
+drop function if exists public.is_board_owner(uuid);
+drop function if exists public.can_read_board(uuid);
+drop function if exists public.can_see_profile(uuid);
+drop function if exists public.board_image_quota_ok(uuid);
+drop function if exists public.board_id_from_path(text);

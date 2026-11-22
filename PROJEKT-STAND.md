@@ -45,7 +45,8 @@ npx esbuild entry.js --bundle --minify --format=iife --global-name=supabase --ta
 - `links` (a, b, short, long) – beide Charaktere müssen zum selben Board gehören
 - `factions` (name, color `#rrggbb`) und `character_factions` (Zuordnung, mehrere je Charakter, `position` = Reihenfolge)
 - `board_visits` (wer hat welches geteilte Board besucht → „Mit mir geteilt“)
-- Funktionen: `open_shared_board(board, token)`, `get_share_token`, `reset_share_link(board, remove_visitors)`, `delete_my_account`, Hilfsfunktionen `is_board_owner`, `can_read_board`, `can_see_profile`
+- Funktionen (API): `open_shared_board(board, token)`, `get_share_token`, `reset_share_link(board, remove_visitors)`, `delete_my_account` – prüfen selbst, wer angemeldet ist. Der Supabase Security Advisor meldet für diese 4 „Signed-In Users Can Execute SECURITY DEFINER Function“: **gewollt**, die App ruft sie auf.
+- Hilfsfunktionen für die Rechte-Regeln liegen im Schema **`private`** (nicht über die API erreichbar): `private.is_board_owner`, `can_read_board`, `can_see_profile`, `board_id_from_path`, `board_image_quota_ok`
 - Storage-Bucket `board-images` (privat), Pfad `<board-id>/<datei>.jpg`, Auslieferung über signierte URLs (1 h)
 - Grenzen: 200 Boards/Konto, 2000 Charaktere, 10 000 Verbindungen, 50 Fraktionen je Board, 10 Fraktionen je Charakter, 3000 Bilder je Board (`board_image_quota_ok`)
 - Ändern ist nur bei Inhaltsspalten erlaubt (spaltenweise `grant update`); ID, Board und Zeitstempel sind fest
