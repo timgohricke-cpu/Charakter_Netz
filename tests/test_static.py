@@ -59,5 +59,23 @@ check('schema.sql: Funktionen mit "create or replace"', not bad, bad[:3])
 bad = [l for l in schema.splitlines() if re.match(r'\s*create (policy|trigger)', l, re.I)]
 pol = [l for l in bad if not re.search(r'drop (policy|trigger) if exists', schema)]
 check('schema.sql: Policies/Trigger vorher mit "drop … if exists"', not pol)
+# Jede Server-Funktion, die die App aufruft, steht in schema.sql (sonst fehlt SQL vor dem Hochladen der App)
+rpcs = set(re.findall(r"sb\.rpc\('(\w+)'", app))
+missing = [f for f in rpcs if not re.search(rf'create or replace function public\.{f}\(', schema)]
+check(f'Alle {len(rpcs)} von der App aufgerufenen Server-Funktionen stehen in schema.sql', rpcs and not missing, missing)
+# Testboard „Silber“ (tests/data) ist gültig und entspricht dem Generator
+import json, subprocess
+sj = os.path.join(ROOT, 'tests', 'data', 'silber.json')
+try:
+    before = open(sj, encoding='utf-8').read()
+    subprocess.run([sys.executable, os.path.join(ROOT, 'tests', 'data', 'make_silber.py')], check=True, capture_output=True)
+    after = open(sj, encoding='utf-8').read(); d = json.loads(after)
+    ids = {c['id'] for c in d['characters']}; fids = {f['id'] for f in d['factions']}
+    ok = (before == after and d['format'] == 'charakter-netz' and d['version'] == 2 and len(d['characters']) >= 50
+          and all(l['a'] in ids and l['b'] in ids for l in d['links']) and all(set(c['factions']) <= fids for c in d['characters'])
+          and all(re.fullmatch(r'#[0-9a-f]{6}', f['color']) for f in d['factions']) and len(d['factions']) <= 50)
+    check(f"Testboard Silber gültig ({len(d['characters'])} Charaktere, {len(d['links'])} Verbindungen) und aktuell", ok)
+except Exception as e:
+    check('Testboard Silber gültig und aktuell', False, e)
 print(f'\nStatisch: {sum(results)} von {len(results)} Prüfungen bestanden.')
 sys.exit(0 if all(results) else 1)

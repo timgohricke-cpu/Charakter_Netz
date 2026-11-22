@@ -241,7 +241,11 @@ create or replace function public.protect_columns() returns trigger
 language plpgsql set search_path = '' as $$
 begin
   if tg_table_name = 'boards' then
-    if new.owner_id <> old.owner_id or new.created_at <> old.created_at then
+    if new.created_at <> old.created_at then
+      raise exception 'immutable_column';
+    end if;
+    -- Ersteller wechselt nur über transfer_board_owner() (setzt cn.transfer für diese Transaktion)
+    if new.owner_id <> old.owner_id and current_setting('cn.transfer', true) is distinct from 'on' then
       raise exception 'immutable_column';
     end if;
     if new.share_token <> old.share_token and current_setting('cn.rotate', true) is distinct from 'on' then
@@ -402,6 +406,32 @@ begin
 end;
 $$;
 
+-- Ersteller übertragen (nur der bisherige Ersteller). Der neue Ersteller muss das Board schon über den
+-- Freigabe-Link geöffnet haben (Eintrag in board_visits = er hat Zugriff). Danach ist der bisherige Ersteller
+-- Besucher (Nur-Lesen, „Mit mir geteilt“); Bilder, Freigabe-Link und alle übrigen Besucher bleiben.
+create or replace function public.transfer_board_owner(p_board uuid, p_new_owner uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+declare v_owner uuid;
+begin
+  if auth.uid() is null then raise exception 'not_authenticated'; end if;
+  select owner_id into v_owner from public.boards where id = p_board for update;
+  if v_owner is null or v_owner <> auth.uid() then raise exception 'not_owner'; end if;
+  if p_new_owner is null or p_new_owner = v_owner then raise exception 'invalid_new_owner'; end if;
+  if not exists (select 1 from public.board_visits v where v.board_id = p_board and v.user_id = p_new_owner) then
+    raise exception 'new_owner_no_access';
+  end if;
+  if (select count(*) from public.boards where owner_id = p_new_owner) >= 200 then
+    raise exception 'limit_boards_new_owner';
+  end if;
+  perform set_config('cn.transfer', 'on', true);
+  update public.boards set owner_id = p_new_owner where id = p_board;
+  perform set_config('cn.transfer', 'off', true);
+  delete from public.board_visits where board_id = p_board and user_id = p_new_owner;
+  insert into public.board_visits (user_id, board_id) values (v_owner, p_board)
+    on conflict (user_id, board_id) do update set visited_at = now();
+end;
+$$;
+
 -- Eigenes Konto löschen (Boards, Charaktere, Verbindungen, Besuche werden mitgelöscht;
 -- die Bilder löscht die App vorher über die Storage-API)
 create or replace function public.delete_my_account() returns void
@@ -438,7 +468,7 @@ $$;
 
 revoke all on function private.is_board_owner(uuid), private.can_read_board(uuid), private.board_id_from_path(text),
   public.open_shared_board(uuid, uuid), public.get_share_token(uuid), public.reset_share_link(uuid, boolean),
-  public.delete_my_account(), public.handle_new_user(), public.touch_board(), public.enforce_limits(),
+  public.transfer_board_owner(uuid, uuid), public.delete_my_account(), public.handle_new_user(), public.touch_board(), public.enforce_limits(),
   public.protect_columns(), public.touch_updated_at(), public.cn_email_domain(), public.protect_auth_email(),
   private.board_image_quota_ok(uuid) from public, anon;
 -- Interne Funktionen (Trigger, Hilfen) braucht niemand direkt aufzurufen
@@ -447,7 +477,7 @@ revoke all on function public.handle_new_user(), public.touch_board(), public.en
   from authenticated;
 grant execute on function private.is_board_owner(uuid), private.can_read_board(uuid), private.board_id_from_path(text),
   public.open_shared_board(uuid, uuid), public.get_share_token(uuid), public.reset_share_link(uuid, boolean),
-  public.delete_my_account(), private.board_image_quota_ok(uuid) to authenticated;
+  public.transfer_board_owner(uuid, uuid), public.delete_my_account(), private.board_image_quota_ok(uuid) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- Bilder: privater Storage-Bucket, Pfad "<board-id>/<datei>.jpg"
