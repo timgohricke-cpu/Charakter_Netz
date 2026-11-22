@@ -265,3 +265,22 @@ input[type=color] { width: 40px; height: 34px; padding: 2px; border: 1px solid v
 .dead-check { padding-bottom: 10px; }
 .theme-btn { font-size: 18px; }
 @media (max-width: 520px) { .row2 { grid-template-columns: 1fr; } .legend { max-width: 60%; } }
+/* Mehrere Fraktionen: Name in Farbabschnitten, Rand als Farbring */
+.colored.multi { background-image: var(--grad-h); -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent; }
+.avatar.multi, .pin-dot.multi { border-color: transparent; background: linear-gradient(var(--node-bg), var(--node-bg)) padding-box, var(--grad-c) border-box; }
+.pin-name .colored { font-weight: 600; }
+/* Fraktions-Auswahl */
+.picker { position: relative; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px; min-height: 42px; cursor: text; }
+.chips:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c, var(--line)); border-radius: 999px; padding: 2px 4px 2px 9px; font-size: 13px; color: var(--c, var(--text)); font-weight: 600; background: var(--panel); }
+.chip-x { background: none; border: 0; cursor: pointer; color: var(--muted); font-size: 15px; line-height: 1; padding: 0 4px; border-radius: 50%; }
+.chip-x:hover { color: var(--danger); }
+.chip-input { flex: 1; min-width: 120px; border: 0 !important; background: transparent !important; padding: 4px !important; outline: none; }
+.suggest { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; list-style: none; margin: 0; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); max-height: 240px; overflow: auto; }
+.suggest li { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer; color: var(--c, var(--text)); }
+.suggest li.active, .suggest li:hover { background: var(--panel-2); }
+.suggest li.new { color: var(--accent); }
+.suggest li.empty-opt { cursor: default; }
+.tags-inline { gap: 4px; }
+.tags-inline .tag { font-size: 12px; padding: 1px 8px 1px 6px; }
