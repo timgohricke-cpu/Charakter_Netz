@@ -223,9 +223,22 @@ grant insert (name, map_path, map_w, map_h) on public.boards to authenticated;
 grant update (name, map_path, map_w, map_h) on public.boards to authenticated;
 grant delete on public.boards to authenticated;
 
--- Profile: angemeldete Nutzer dürfen Benutzernamen sehen (z. B. „geteilt von …“)
+-- Profile: Man sieht nur sich selbst, die Ersteller der Boards, die man ansehen darf,
+-- und die Besucher der eigenen Boards – keine Liste aller Nutzer.
+create or replace function public.can_see_profile(pid uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select auth.uid() is not null and (
+    pid = auth.uid()
+    or exists (select 1 from public.board_visits v join public.boards b on b.id = v.board_id
+               where v.user_id = auth.uid() and b.owner_id = pid)
+    or exists (select 1 from public.board_visits v join public.boards b on b.id = v.board_id
+               where v.user_id = pid and b.owner_id = auth.uid())
+  );
+$$;
+revoke all on function public.can_see_profile(uuid) from public, anon;
+grant execute on function public.can_see_profile(uuid) to authenticated;
 drop policy if exists profiles_select on public.profiles;
-create policy profiles_select on public.profiles for select to authenticated using (true);
+create policy profiles_select on public.profiles for select to authenticated using (public.can_see_profile(id));
 
 -- Boards
 drop policy if exists boards_select on public.boards;
