@@ -26,7 +26,7 @@
   const SB_KEY = String(CFG.SUPABASE_KEY || '');
   const EMAIL_DOMAIN = String(CFG.EMAIL_DOMAIN || 'users.charakter-netz.app');
   const BUCKET = 'board-images';
-  const APP_VERSION = '2.8'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
+  const APP_VERSION = '2.9'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
   const CONFIGURED = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(SB_URL) && SB_KEY.length > 20 && !!window.supabase;
   // Benutzernamen: 2–24 Zeichen, Buchstaben/Ziffern . _ - sowie Japanisch (Hiragana, Katakana, Kanji).
   // Muss zu private.cn_username_ok() in supabase/schema.sql passen.
@@ -1281,7 +1281,10 @@
           ? el('li', { role: 'option', class: 'new' }, el('span', { text: `+ Neue Fraktion „${it.create}“ anlegen` }))
           : paint(el('li', { role: 'option' }, el('span', { class: 'dot' }), el('span', { text: it.name })), it.color);
         li.classList.toggle('active', i === active);
-        li.addEventListener('pointerdown', (e) => { e.preventDefault(); pick(it); });
+        // Erst beim Antippen/Klicken wählen (nicht schon beim Berühren), damit man die Liste auf dem Handy wischen kann.
+        // mousedown verhindern hält den Fokus im Eingabefeld (kommt beim Wischen gar nicht erst).
+        li.addEventListener('mousedown', (e) => e.preventDefault());
+        li.addEventListener('click', () => pick(it));
         return li;
       }));
       if (!items.length) list.append(el('li', { class: 'muted empty-opt', text: pool().length ? 'Alle Fraktionen sind schon ausgewählt.' : 'Noch keine Fraktionen – tippe einen Namen ein.' }));

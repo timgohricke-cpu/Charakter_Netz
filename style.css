@@ -280,7 +280,7 @@ input[type=color] { width: 40px; height: 34px; padding: 2px; border: 1px solid v
 .chip-x { background: none; border: 0; cursor: pointer; color: var(--muted); font-size: 15px; line-height: 1; padding: 0 4px; border-radius: 50%; }
 .chip-x:hover { color: var(--danger); }
 .chip-input { flex: 1; min-width: 120px; border: 0 !important; background: transparent !important; padding: 4px !important; outline: none; }
-.suggest { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; list-style: none; margin: 0; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); max-height: 240px; overflow: auto; }
+.suggest { touch-action: pan-y; overscroll-behavior: contain; position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; list-style: none; margin: 0; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); max-height: 240px; overflow: auto; }
 .suggest li { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer; color: var(--c, var(--text)); }
 .suggest li.active, .suggest li:hover { background: var(--panel-2); }
 .suggest li.new { color: var(--accent); }

@@ -2,7 +2,7 @@
 // Service Worker: macht die App offline-fähig und installierbar.
 // Updates: Bei jeder Veröffentlichung CACHE hochzählen (und APP_VERSION in app.js). Installierte Apps
 // holen sich die neue Fassung automatisch – eine Neuinstallation ist nie nötig.
-const CACHE = 'charakter-netz-v8';
+const CACHE = 'charakter-netz-v9';
 const ASSETS = [
   './', './index.html', './app.js', './style.css', './manifest.webmanifest',
   './config.js', './vendor/supabase.js',

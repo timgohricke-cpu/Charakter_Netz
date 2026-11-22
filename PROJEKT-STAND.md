@@ -1,4 +1,4 @@
-# Charakter-Netz – Projektstand (Version 2.8)
+# Charakter-Netz – Projektstand (Version 2.9)
 
 Diese Datei beschreibt den aktuellen Stand, damit die Arbeit in einem neuen Chat nahtlos weitergehen kann.
 **Hier stehen keine Passwörter oder geheimen Schlüssel – und das soll so bleiben (das Repo ist öffentlich).**
@@ -26,7 +26,7 @@ Statische PWA ohne Build-Schritt und ohne externe Bibliotheken zur Laufzeit, geh
 | `config.js` | Supabase-URL, öffentlicher *publishable key*, `EMAIL_DOMAIN` |
 | `app.js` | Gesamte App (ca. 1600 Zeilen, ein IIFE, kein Framework) |
 | `style.css` | Design inkl. Hell-/Dunkelmodus über CSS-Variablen (`:root` / `:root[data-theme=light]`) |
-| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v8`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.8) |
+| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v9`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.9) |
 | `vendor/supabase.js` | `@supabase/supabase-js` 2.119.2, lokal mit esbuild gebündelt (IIFE, global `supabase`) |
 | `supabase/schema.sql` | Komplettes Datenbank-Skript; **idempotent** (kann jederzeit erneut ausgeführt werden) |
 | `manifest.webmanifest`, Icons | Installation als App |
@@ -72,7 +72,7 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 **Update-Hinweis:** erscheint nur, wenn auf dem Server wirklich eine andere `APP_VERSION` liegt.
 **Rechte:** Nur der Ersteller bearbeitet; Besucher sehen alles im Nur-Lesen-Modus (Hinweis „👁 Nur ansehen · von …“). Durchgesetzt per Row Level Security auf dem Server.
 **Charakternetz:** Linien leicht gebogen (Bogen ≤ 36 px), in der Farbe der gemeinsamen Fraktion (sonst grau); Linienbeschriftung rückt zum weniger verbundenen Ende (64 %); Kreise frei setzen (Modus „＋ Charakter“), ziehen, verbinden (Modus „🔗 Verbinden“), Linienbeschriftung (Kurzbeschreibung) über den Kreisen, Klick → Infokarte bzw. lange Beschreibung; Zoom (Mausrad, Pinch), „Alles zeigen“.
-**Fraktionen:** keine, eine oder mehrere je Charakter; Eingabe mit Vorschlägen und „+ Neue Fraktion anlegen“; Rand und Name in Farbabschnitten; ohne Fraktion neutral (dunkel: weiß); Verwaltung über „🎨 Fraktionen“ (Farbe, Name, Löschen); Legende oben rechts (Fraktion anklicken = nur ihre Mitglieder zeigen, erneut klicken = aufheben).
+**Fraktionen:** keine, eine oder mehrere je Charakter; Eingabe mit Vorschlägen und „+ Neue Fraktion anlegen“ (Vorschlag wird erst beim Antippen/Klicken gewählt, nicht schon beim Berühren – die Liste lässt sich auf dem Handy wischen; seit 2.9); Rand und Name in Farbabschnitten; ohne Fraktion neutral (dunkel: weiß); Verwaltung über „🎨 Fraktionen“ (Farbe, Name, Löschen); Legende oben rechts (Fraktion anklicken = nur ihre Mitglieder zeigen, erneut klicken = aufheben).
 **Verstorben:** behalten ihre Fraktionsfarben, werden aber verblasst/halbdurchsichtig dargestellt (Netz: Deckkraft 0,5; Karte, Tabelle, Infokarte ebenso), „†“ hinter dem Namen, Bild schwarz-weiß. Legende: „Verstorben † (verblasst)“.
 **Übersicht im Netz (seit 2.7):**
 - *Beschriftungen ohne Überlappung:* Linienbeschriftungen, die eine wichtigere Beschriftung oder einen Kreis überdecken würden, werden ausgeblendet (Klasse `culled`); Namen ebenso (`name-off`, Wichtigere zuerst). Beim Darüberfahren, Tastatur-Fokus und in der Auswahl erscheinen sie.
@@ -105,10 +105,10 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 
 ## Tests
 **`bash tests/run_all.sh`** – statische Prüfungen, Datenbank (lokales Postgres, frisch + Upgrade + doppelt) und Oberfläche (Chrome headless mit nachgebautem Supabase). Am Ende muss „ALLE TESTS BESTANDEN“ stehen. Details und Live-Prüfliste: `tests/README.md`.
-Stand 22.11.2026 (Version 2.8): 24 statische + 318 Datenbank- + 167 Oberflächen-Prüfungen (509), alle bestanden.
+Stand 22.11.2026 (Version 2.9): 24 statische + 318 Datenbank- + 175 Oberflächen-Prüfungen (517), alle bestanden.
 
 ## Testboards
-- `tests/data/silber.json` (erzeugt von `tests/data/make_silber.py`): „Silber – Die Trilogie der Träume“ (Kerstin Gier), 59 Charaktere, 11 Fraktionen, viele Mehrfach-Fraktionen – über „Importieren“ in ein Konto laden. Gedacht für „✨ Anordnen“/Inseln und als Board für „Ersteller übertragen“ (test_ersteller → test_besucher und zurück). Nebenfiguren, über die die Quellen wenig sagen, sind ausdrücklich so beschrieben.
+- `tests/data/silber.json` (erzeugt von `tests/data/make_silber.py`): „Silber – Die Trilogie der Träume“ (Kerstin Gier), Stand Ende Band 3: 81 Charaktere (auch Nebenfiguren ohne Verbindung, z. B. Lehrkräfte), 167 Verbindungen (feste Fakten wie Familie bleiben, Beziehungen zeigen den letzten Stand, Verlauf in der langen Beschreibung), 15 Fraktionen, viele Mehrfach-Fraktionen – über „Importieren“ in ein Konto laden (liegt im Konto test_ersteller). Gedacht für „✨ Anordnen“/Inseln und als Board für „Ersteller übertragen“ (test_ersteller → test_besucher und zurück). Nebenfiguren, über die die Quellen wenig sagen, sind ausdrücklich so beschrieben.
 
 ## Arbeitsweise / Hinweise für Claude
 - Supabase ist aus der Cloud-Arbeitsumgebung von Claude **nicht erreichbar** (Proxy). Getestet wird im **Browser-Fenster der Claude-Desktop-App** auf der Live-Seite oder einer Testkopie (z. B. Unterordner `v2-test/` auf `main`, danach wieder löschen).
