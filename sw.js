@@ -1,8 +1,9 @@
 'use strict';
 // Service Worker: macht die App offline-fähig und installierbar.
-const CACHE = 'charakter-netz-v1';
+const CACHE = 'charakter-netz-v2';
 const ASSETS = [
   './', './index.html', './app.js', './style.css', './manifest.webmanifest',
+  './config.js', './vendor/supabase.js',
   './icon.svg', './icon-192.png', './icon-512.png', './apple-touch-icon.png'
 ];
 
@@ -22,8 +23,10 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  // Immer beim Server nachfragen (ETag), damit Updates sofort ankommen und nicht 10 Minuten im Browser-Cache hängen
+  const fresh = req.mode === 'navigate' ? new Request(req.url, { cache: 'no-cache', credentials: 'same-origin' }) : new Request(req, { cache: 'no-cache' });
   e.respondWith(
-    fetch(req)
+    fetch(fresh)
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
