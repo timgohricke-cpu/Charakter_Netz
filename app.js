@@ -531,7 +531,7 @@
     try {
       [mine, shared, local] = await Promise.all([
         q(sb.from('boards').select(BOARD_COLS + ',characters(count),links(count)').eq('owner_id', me.id).order('updated_at', { ascending: false })),
-        q(sb.from('board_visits').select('board_id,visited_at,board:boards(id,name,updated_at,owner:profiles(username))').eq('user_id', me.id).order('visited_at', { ascending: false })),
+        q(sb.from('board_visits').select('board_id,visited_at,board:boards!board_visits_board_id_fkey(id,name,updated_at,owner:profiles!boards_owner_id_fkey(username))').eq('user_id', me.id).order('visited_at', { ascending: false })),
         LocalDB.all(),
       ]);
     } catch (e) {
@@ -624,7 +624,7 @@
     const visitors = el('ul', { class: 'link-list' }, el('li', { class: 'muted', text: 'Lädt …' }));
     const loadVisitors = async () => {
       try {
-        const v = await q(sb.from('board_visits').select('visited_at,user:profiles(username)').eq('board_id', bid).order('visited_at', { ascending: false }));
+        const v = await q(sb.from('board_visits').select('visited_at,user:profiles!board_visits_user_id_fkey(username)').eq('board_id', bid).order('visited_at', { ascending: false }));
         visitors.replaceChildren(...(v.length ? v.map((x) => el('li', {}, el('strong', { text: (x.user && x.user.username) || '?' }), el('span', { class: 'muted', text: ' · ' + new Date(x.visited_at).toLocaleDateString('de-DE') })))
           : [el('li', { class: 'muted', text: 'Noch niemand hat das Board über den Link geöffnet.' })]));
       } catch { visitors.replaceChildren(el('li', { class: 'muted', text: 'Konnte nicht geladen werden.' })); }
