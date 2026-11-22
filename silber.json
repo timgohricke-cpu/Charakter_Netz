@@ -1,0 +1,1495 @@
+{
+ "format": "charakter-netz",
+ "version": 2,
+ "name": "Silber – Die Trilogie der Träume",
+ "factions": [
+  {
+   "id": "f-silber",
+   "name": "Familie Silber",
+   "color": "#9e9e9e"
+  },
+  {
+   "id": "f-spencer",
+   "name": "Familie Spencer",
+   "color": "#1565c0"
+  },
+  {
+   "id": "f-harper",
+   "name": "Familie Harper",
+   "color": "#2e7d32"
+  },
+  {
+   "id": "f-pp",
+   "name": "Familie Porter-Peregrin",
+   "color": "#ad1457"
+  },
+  {
+   "id": "f-clark",
+   "name": "Familie Clark",
+   "color": "#6d4c41"
+  },
+  {
+   "id": "f-traum",
+   "name": "Traumreisende",
+   "color": "#7e57c2"
+  },
+  {
+   "id": "f-kult",
+   "name": "Dämonenbeschwörung (Friedhof)",
+   "color": "#b71c1c"
+  },
+  {
+   "id": "f-frognal",
+   "name": "Frognal Academy",
+   "color": "#f9a825"
+  },
+  {
+   "id": "f-secrecy",
+   "name": "Tittle-Tattle / Secrecy",
+   "color": "#00897b"
+  },
+  {
+   "id": "f-wesen",
+   "name": "Traumwesen & Traumgestalten",
+   "color": "#26c6da"
+  },
+  {
+   "id": "f-tiere",
+   "name": "Tiere",
+   "color": "#ef6c00"
+  }
+ ],
+ "characters": [
+  {
+   "id": "liv",
+   "name": "Liv Silber",
+   "short": "Olivia „Liv“ Silber, 16, Ich-Erzählerin, Traumreisende",
+   "info": "Olivia „Liv“ Silber ist die Hauptfigur und Erzählerin der Trilogie. Sie ist mit Mutter, Schwester, Kindermädchen und Hündin schon unzählige Male umgezogen (u. a. München, Pretoria, Utrecht, Berkeley, Hyderabad, Edinburgh) und wünscht sich ein dauerhaftes Zuhause. In London kommt sie an die Frognal Academy und stolpert eines Nachts in Graysons Traum – auf einen Friedhof, wo Grayson, Henry, Arthur und Jasper einen Dämon beschwören. Liv ist schlau, neugierig, kann Kung-Fu (bei Mr Wu in Berkeley gelernt) und spielt Gitarre. Sie verliebt sich in Henry Harper; ihr Spitzname bei Mia, Henry und Grayson: „Livvy“.\n\nBand 1: Friedhofsritual, Herbstball, Mausoleum – Henry und Grayson retten sie vor Anabel.\nBand 2: Streit und Trennung von Henry nach dem Traum mit „B“; Arthur bedroht Mia.\nBand 3: die Notlüge mit dem erfundenen Freund „Rasmus“, Versöhnung mit Henry, Arthur wird in einem Traum gefangen.",
+   "place": "London",
+   "x": -700,
+   "y": -500,
+   "mapPos": null,
+   "factions": [
+    "f-silber",
+    "f-traum",
+    "f-frognal",
+    "f-kult"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "mia",
+   "name": "Mia Silber",
+   "short": "Livs jüngere Schwester (13), Spezialistin für Ermittlungen jeder Art",
+   "info": "Detektivisch veranlagt, mit Zahnspange und Brille. Schlafwandelt in Band 2 und wird dabei von Arthur fast aus dem Fenster gelockt. Deckt in Band 3 auf, wer hinter dem Blog „Tittle-Tattle“ (Secrecy) steckt.",
+   "place": "London",
+   "x": -530,
+   "y": -463,
+   "mapPos": null,
+   "factions": [
+    "f-silber",
+    "f-frognal"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "ann",
+   "name": "Ann Matthews",
+   "short": "Livs und Mias Mutter, Literaturprofessorin",
+   "info": "Amerikanerin, zieht für ihre Lehraufträge ständig um. Verliebt sich in Ernest Spencer, der ihr in Band 2 einen Antrag macht; Hochzeit am Ende von Band 3 an einem Strand.",
+   "place": "London",
+   "x": -360,
+   "y": -476,
+   "mapPos": null,
+   "factions": [
+    "f-silber"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "vater",
+   "name": "Livs Vater",
+   "short": "Vater von Liv und Mia, lebt in Zürich (im Film „Paul Silber“)",
+   "info": "",
+   "place": "Zürich",
+   "x": -190,
+   "y": -489,
+   "mapPos": null,
+   "factions": [
+    "f-silber"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "lottie",
+   "name": "Lottie Wastlhuber",
+   "short": "Bayerisches Kindermädchen der Silbers, seit zwölf Jahren in der Familie",
+   "info": "Kam als Au-pair-Mädchen und blieb. Kocht, backt, flicht Gretel-Frisuren und hält die Familie zusammen. Charles Spencer interessiert sich für sie; in Band 3 verliebt sie sich in den falschen Hochzeitsplaner Pascal und beschließt, nach Deutschland zurückzugehen.",
+   "place": "London",
+   "x": -20,
+   "y": -452,
+   "mapPos": null,
+   "factions": [
+    "f-silber"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "butter",
+   "name": "Buttercup",
+   "short": "Hündin der Silbers („Princess Buttercup formerly known as Doctor Watson“)",
+   "info": "",
+   "place": "London",
+   "x": 150,
+   "y": -465,
+   "mapPos": null,
+   "factions": [
+    "f-tiere",
+    "f-silber"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "ernest",
+   "name": "Ernest Spencer",
+   "short": "„Mr. Planänderung“, Staranwalt, Anns neue Liebe",
+   "info": "Über 50, Vollglatze, große Ohren, etwas zu weiße Zähne. Anwalt für internationales Wirtschaftsrecht, Vater der Zwillinge Grayson und Florence, Bruder von Charles. Macht Ann bei seinem 53. Geburtstag einen Heiratsantrag.",
+   "place": "London",
+   "x": 320,
+   "y": -478,
+   "mapPos": null,
+   "factions": [
+    "f-spencer"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "grayson",
+   "name": "Grayson Spencer",
+   "short": "Ernests Sohn (18), Zwilling von Florence, Livs Stiefbruder",
+   "info": "Basketballspieler, Henrys bester Freund, freundlich zu den Silbers. Mit Emily Clark zusammen, bis sie sich in Band 2 trennen. Rettet Mia in Band 2, indem er Arthur weckt.",
+   "place": "London",
+   "x": 490,
+   "y": -491,
+   "mapPos": null,
+   "factions": [
+    "f-spencer",
+    "f-traum",
+    "f-frognal",
+    "f-kult"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "florence",
+   "name": "Florence Spencer",
+   "short": "Ernests Tochter (18), Zwilling von Grayson",
+   "info": "Begrüßt Ann zunächst freundlich, wird aber feindselig, als die Silbers einziehen. Beste Freundin von Emily. In Band 3 stellt sich heraus: Sie hat den Secrecy-Blog übernommen (zusammen mit Pandora Porter-Peregrin und Sam Clark).",
+   "place": "London",
+   "x": 660,
+   "y": -454,
+   "mapPos": null,
+   "factions": [
+    "f-spencer",
+    "f-frognal",
+    "f-secrecy"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "charles",
+   "name": "Charles Spencer",
+   "short": "Ernests Bruder, Zahnarzt",
+   "info": "Liv schleicht sich in Band 2 in seinen Traum, um herauszufinden, ob er es mit Lottie ernst meint.",
+   "place": "London",
+   "x": -640,
+   "y": -307,
+   "mapPos": null,
+   "factions": [
+    "f-spencer"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "bocker",
+   "name": "Philippa Adelaide Spencer",
+   "short": "„Das Bocker“, Ernests Mutter, Großmutter der Zwillinge",
+   "info": "Konservativ; mag weder Anns amerikanische Herkunft noch Lotties deutsche. Stolz auf ihren pfauenförmigen Buchsbaum „Mr Snuggles“, den Liv und Mia in Band 2 zurechtstutzen. Mag Emily und ist über Graysons Trennung bestürzt.",
+   "place": "London",
+   "x": -470,
+   "y": -320,
+   "mapPos": null,
+   "factions": [
+    "f-spencer"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "snuggles",
+   "name": "Mr Snuggles",
+   "short": "Pfauenförmiger Buchsbaum von Mrs Spencer",
+   "info": "",
+   "place": "London",
+   "x": -300,
+   "y": -333,
+   "mapPos": null,
+   "factions": [
+    "f-spencer"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "erstefrau",
+   "name": "Ernests erste Frau",
+   "short": "Mutter von Grayson und Florence, an Chorea Huntington gestorben",
+   "info": "",
+   "place": "",
+   "x": -130,
+   "y": -296,
+   "mapPos": null,
+   "factions": [
+    "f-spencer"
+   ],
+   "dead": true,
+   "image": null
+  },
+  {
+   "id": "dimbleby",
+   "name": "Mrs Dimbleby",
+   "short": "Hausangestellte und Köchin der Spencers",
+   "info": "",
+   "place": "London",
+   "x": 40,
+   "y": -309,
+   "mapPos": null,
+   "factions": [
+    "f-spencer"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "henry",
+   "name": "Henry Harper",
+   "short": "18, träumt für sein Leben gern, Livs große Liebe",
+   "info": "Blonde, wild abstehende Haare, graue Augen. Flügelspieler der Frognal Flames, Kandidat für ein Stipendium in St Andrews. Sohn eines bekannten Londoner Geschäftsmanns aus dessen dritter Ehe. Lädt Liv lange nicht zu sich nach Hause ein. Trennung in Band 2 (Traum mit „B“), Versöhnung in Band 3; würde für Liv sein Leben riskieren.",
+   "place": "London",
+   "x": 210,
+   "y": -322,
+   "mapPos": null,
+   "factions": [
+    "f-harper",
+    "f-traum",
+    "f-frognal",
+    "f-kult"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "amy",
+   "name": "Amy Harper",
+   "short": "Henrys kleine Schwester",
+   "info": "",
+   "place": "London",
+   "x": 380,
+   "y": -335,
+   "mapPos": null,
+   "factions": [
+    "f-harper"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "milo",
+   "name": "Milo Harper",
+   "short": "Henrys Bruder",
+   "info": "",
+   "place": "London",
+   "x": 550,
+   "y": -298,
+   "mapPos": null,
+   "factions": [
+    "f-harper"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "ron",
+   "name": "Ron Harper",
+   "short": "Aus Henrys Familie (Nebenfigur laut Fan-Wiki)",
+   "info": "",
+   "place": "London",
+   "x": 720,
+   "y": -311,
+   "mapPos": null,
+   "factions": [
+    "f-harper"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "vaterh",
+   "name": "Henrys Vater",
+   "short": "Bekannter Londoner Geschäftsmann, mehrfach verheiratet",
+   "info": "",
+   "place": "London",
+   "x": -700,
+   "y": -164,
+   "mapPos": null,
+   "factions": [
+    "f-harper"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "arthur",
+   "name": "Arthur Hamilton",
+   "short": "„Der schönste Junge der westlichen Hemisphäre“ – später der Bösewicht",
+   "info": "Früher Freund von Henry, Grayson und Jasper, Anabels Freund. Traumreisender, der Menschen mit einem Codewort auch im Wachzustand lenken kann. Will sich an Liv rächen; gibt sich in Band 2 in Mias Träumen als Liv aus. In Band 3 beißt ihn eine Schlange, er wird als Held gefeiert – und schließlich mit Anabels Hilfe im Traum einer Toten gefangen.",
+   "place": "London",
+   "x": -530,
+   "y": -177,
+   "mapPos": null,
+   "factions": [
+    "f-traum",
+    "f-frognal",
+    "f-kult"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "jasper",
+   "name": "Jasper Grant",
+   "short": "„Der dümmste Junge der westlichen Hemisphäre“",
+   "info": "Freund von Grayson, Henry und Arthur. Verbringt Band 2 größtenteils im Auslandsjahr in Frankreich. Persephone schwärmt für ihn. Richtet in Band 3 die Willkommensparty für Arthur aus.",
+   "place": "London",
+   "x": -360,
+   "y": -140,
+   "mapPos": null,
+   "factions": [
+    "f-traum",
+    "f-frognal",
+    "f-kult"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "anabel",
+   "name": "Anabel Scott",
+   "short": "Arthurs Freundin, wollte Liv opfern",
+   "info": "Wuchs bis zum dritten Lebensjahr bei einer Mutter auf, die Dämonen verehrte. Will Liv in Band 1 opfern und kommt in eine psychiatrische Klinik. Wird entlassen, manipuliert ihren Psychiater („Senator Tod“) in Band 3 bis ins Koma – hilft dann aber Liv und Henry, Arthur zu fangen, und scheint sich geändert zu haben.",
+   "place": "London",
+   "x": -190,
+   "y": -153,
+   "mapPos": null,
+   "factions": [
+    "f-kult",
+    "f-traum"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "anabelmutter",
+   "name": "Anabels Mutter",
+   "short": "Verehrte Dämonen; Anabel lebte bis zum 3. Lebensjahr bei ihr",
+   "info": "",
+   "place": "",
+   "x": -20,
+   "y": -166,
+   "mapPos": null,
+   "factions": [
+    "f-kult"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "tod",
+   "name": "Senator Tod",
+   "short": "Spitzname von Anabels Psychiater – liegt in Band 3 im Koma",
+   "info": "",
+   "place": "London",
+   "x": 150,
+   "y": -179,
+   "mapPos": null,
+   "factions": [
+    "f-traum"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "tote",
+   "name": "Die tote Frau",
+   "short": "In ihrem Traum wird Arthur am Ende gefangen",
+   "info": "",
+   "place": "",
+   "x": 320,
+   "y": -142,
+   "mapPos": null,
+   "factions": [
+    "f-wesen"
+   ],
+   "dead": true,
+   "image": null
+  },
+  {
+   "id": "persephone",
+   "name": "Persephone Porter-Peregrin",
+   "short": "Livs wahrgewordener Albtraum – und später gute Freundin",
+   "info": "Soll Liv an der Schule herumführen. Reich und anfangs arrogant, schwärmt für Jasper. Fuchtelt auf Jaspers Party unter Arthurs Einfluss mit einer Pistole herum. Wird eine von Livs engsten Freundinnen.",
+   "place": "London",
+   "x": 490,
+   "y": -155,
+   "mapPos": null,
+   "factions": [
+    "f-pp",
+    "f-frognal"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "pandora",
+   "name": "Pandora Porter-Peregrin",
+   "short": "Persephones Schwester, schreibt mit an Secrecy",
+   "info": "",
+   "place": "London",
+   "x": 660,
+   "y": -168,
+   "mapPos": null,
+   "factions": [
+    "f-pp",
+    "f-secrecy"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "priamos",
+   "name": "Priamos Porter-Peregrin",
+   "short": "Persephones Bruder",
+   "info": "",
+   "place": "London",
+   "x": -640,
+   "y": 29,
+   "mapPos": null,
+   "factions": [
+    "f-pp"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "emily",
+   "name": "Emily Clark",
+   "short": "Florences beste Freundin, Graysons Freundin (bis Band 2)",
+   "info": "Chefredakteurin der Schülerzeitung „Reflexx“. Ihr Bruder Sam hilft Florence in Band 3 beim Secrecy-Blog.",
+   "place": "London",
+   "x": -470,
+   "y": 16,
+   "mapPos": null,
+   "factions": [
+    "f-clark",
+    "f-frognal"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "sam",
+   "name": "Sam Clark",
+   "short": "Emilys Bruder, schreibt mit an Secrecy",
+   "info": "",
+   "place": "London",
+   "x": -300,
+   "y": 3,
+   "mapPos": null,
+   "factions": [
+    "f-clark",
+    "f-secrecy"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "secrecy",
+   "name": "Secrecy",
+   "short": "Pseudonym hinter dem Lästerblog „Tittle-Tattle“",
+   "info": "Enthüllt boshaft Geheimnisse von Schülern und Lehrern der Frognal Academy – auch über Liv, „die Neue“. Wer ursprünglich dahintersteckt, bleibt offen; in Band 3 deckt Mia auf, dass Florence (mit Pandora und Sam) den Blog weitergeführt hat.",
+   "place": "Frognal Academy",
+   "x": -130,
+   "y": -10,
+   "mapPos": null,
+   "factions": [
+    "f-secrecy",
+    "f-frognal"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "lawrence",
+   "name": "Mrs Lawrence",
+   "short": "Französischlehrerin der Frognal Academy",
+   "info": "Klettert unter Arthurs Einfluss in der Mensa auf einen Tisch und plaudert Privates aus.",
+   "place": "Frognal Academy",
+   "x": 40,
+   "y": 27,
+   "mapPos": null,
+   "factions": [
+    "f-frognal"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "wu",
+   "name": "Mr Wu",
+   "short": "Livs Kung-Fu-Lehrer aus Berkeley – im Traum „Wu, die Tigerpranke“, Torwächter",
+   "info": "Der echte Mr Wu unterrichtete Liv in Berkeley. Im Traum steht er in schwarzem Seidenpyjama mit Tigerkopf als sprücheklopfender Torwächter vor ihrer Tür.",
+   "place": "Berkeley / Traumkorridor",
+   "x": 210,
+   "y": 14,
+   "mapPos": null,
+   "factions": [
+    "f-wesen"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "b",
+   "name": "„B“",
+   "short": "Mädchen, mit dem Liv Henry in einem Traum sieht",
+   "info": "",
+   "place": "Traumkorridor",
+   "x": 380,
+   "y": 1,
+   "mapPos": null,
+   "factions": [
+    "f-wesen"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "rasmus",
+   "name": "Rasmus",
+   "short": "Livs erfundener Freund (Notlüge in Band 3)",
+   "info": "",
+   "place": "",
+   "x": 550,
+   "y": -12,
+   "mapPos": null,
+   "factions": [
+    "f-wesen"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "pascal",
+   "name": "Pascal de Gobineau",
+   "short": "Falscher Hochzeitsplaner, Lottie verliebt sich in ihn",
+   "info": "",
+   "place": "London",
+   "x": 720,
+   "y": 25,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "freddy",
+   "name": "Fürchterlicher Freddy",
+   "short": "Traumwesen (Nebenfigur laut Fan-Wiki)",
+   "info": "",
+   "place": "Traumwelt",
+   "x": -700,
+   "y": 172,
+   "mapPos": null,
+   "factions": [
+    "f-wesen"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "lulil",
+   "name": "Lulil",
+   "short": "Traumwesen (Nebenfigur laut Fan-Wiki)",
+   "info": "",
+   "place": "Traumwelt",
+   "x": -530,
+   "y": 159,
+   "mapPos": null,
+   "factions": [
+    "f-wesen"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "spot",
+   "name": "Spot",
+   "short": "Tier (Nebenfigur laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -360,
+   "y": 146,
+   "mapPos": null,
+   "factions": [
+    "f-tiere"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "hazel",
+   "name": "Hazel Pritchard",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -190,
+   "y": 183,
+   "mapPos": null,
+   "factions": [
+    "f-frognal"
+   ],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "daisy",
+   "name": "Daisy Dawn Steward",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -20,
+   "y": 170,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "tomh",
+   "name": "Tom Holland",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": 150,
+   "y": 157,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "madison",
+   "name": "Madison",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": 320,
+   "y": 144,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "nathan",
+   "name": "Nathan Woods",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": 490,
+   "y": 181,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "matt",
+   "name": "Matt Davenport",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": 660,
+   "y": 168,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "callum",
+   "name": "Callum Caspers",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -640,
+   "y": 315,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "lindsay",
+   "name": "Lindsay",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -470,
+   "y": 302,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "samantha",
+   "name": "Samantha",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -300,
+   "y": 339,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "aubrey",
+   "name": "Aubrey",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -130,
+   "y": 326,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "abigail",
+   "name": "Abigail",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": 40,
+   "y": 313,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "theo",
+   "name": "Theo Ellis",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": 210,
+   "y": 300,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "honeycutt",
+   "name": "Mrs Honeycutt",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": 380,
+   "y": 337,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "muriel",
+   "name": "Muriel Honeycutt",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": 550,
+   "y": 324,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "alfred",
+   "name": "Alfred",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": 720,
+   "y": 311,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "gil",
+   "name": "Gil Walker",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -700,
+   "y": 508,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "fats",
+   "name": "Mrs Fatsourakis",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -530,
+   "y": 495,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "anderson",
+   "name": "Dr. Otto Anderson",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -360,
+   "y": 482,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "maisie",
+   "name": "Maisie Brown",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -190,
+   "y": 469,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  },
+  {
+   "id": "triggs",
+   "name": "Harry Triggs",
+   "short": "Nebenfigur (laut Fan-Wiki)",
+   "info": "",
+   "place": "",
+   "x": -20,
+   "y": 506,
+   "mapPos": null,
+   "factions": [],
+   "dead": false,
+   "image": null
+  }
+ ],
+ "links": [
+  {
+   "id": "l0",
+   "a": "liv",
+   "b": "mia",
+   "short": "Schwestern",
+   "long": "Unzertrennlich, „schwer entflammbar“ – ermitteln gemeinsam."
+  },
+  {
+   "id": "l1",
+   "a": "liv",
+   "b": "ann",
+   "short": "Mutter",
+   "long": ""
+  },
+  {
+   "id": "l2",
+   "a": "mia",
+   "b": "ann",
+   "short": "Mutter",
+   "long": ""
+  },
+  {
+   "id": "l3",
+   "a": "liv",
+   "b": "vater",
+   "short": "Vater",
+   "long": "Lebt in Zürich."
+  },
+  {
+   "id": "l4",
+   "a": "mia",
+   "b": "vater",
+   "short": "Vater",
+   "long": ""
+  },
+  {
+   "id": "l5",
+   "a": "ann",
+   "b": "vater",
+   "short": "getrennt",
+   "long": ""
+  },
+  {
+   "id": "l6",
+   "a": "liv",
+   "b": "lottie",
+   "short": "Kindermädchen",
+   "long": ""
+  },
+  {
+   "id": "l7",
+   "a": "mia",
+   "b": "lottie",
+   "short": "Kindermädchen",
+   "long": ""
+  },
+  {
+   "id": "l8",
+   "a": "ann",
+   "b": "lottie",
+   "short": "Kindermädchen der Familie",
+   "long": ""
+  },
+  {
+   "id": "l9",
+   "a": "liv",
+   "b": "butter",
+   "short": "Hündin",
+   "long": ""
+  },
+  {
+   "id": "l10",
+   "a": "mia",
+   "b": "butter",
+   "short": "Hündin",
+   "long": ""
+  },
+  {
+   "id": "l11",
+   "a": "ann",
+   "b": "ernest",
+   "short": "Paar, Hochzeit in Band 3",
+   "long": "Antrag zu Ernests 53. Geburtstag (Band 2), Hochzeit am Strand (Band 3)."
+  },
+  {
+   "id": "l12",
+   "a": "ernest",
+   "b": "grayson",
+   "short": "Vater",
+   "long": ""
+  },
+  {
+   "id": "l13",
+   "a": "ernest",
+   "b": "florence",
+   "short": "Vater",
+   "long": ""
+  },
+  {
+   "id": "l14",
+   "a": "grayson",
+   "b": "florence",
+   "short": "Zwillinge",
+   "long": ""
+  },
+  {
+   "id": "l15",
+   "a": "ernest",
+   "b": "charles",
+   "short": "Brüder",
+   "long": ""
+  },
+  {
+   "id": "l16",
+   "a": "ernest",
+   "b": "bocker",
+   "short": "Mutter",
+   "long": ""
+  },
+  {
+   "id": "l17",
+   "a": "bocker",
+   "b": "grayson",
+   "short": "Großmutter",
+   "long": ""
+  },
+  {
+   "id": "l18",
+   "a": "bocker",
+   "b": "florence",
+   "short": "Großmutter",
+   "long": ""
+  },
+  {
+   "id": "l19",
+   "a": "ernest",
+   "b": "erstefrau",
+   "short": "erste Ehefrau († Huntington)",
+   "long": ""
+  },
+  {
+   "id": "l20",
+   "a": "erstefrau",
+   "b": "grayson",
+   "short": "Mutter",
+   "long": ""
+  },
+  {
+   "id": "l21",
+   "a": "erstefrau",
+   "b": "florence",
+   "short": "Mutter",
+   "long": ""
+  },
+  {
+   "id": "l22",
+   "a": "bocker",
+   "b": "snuggles",
+   "short": "ihr ganzer Stolz",
+   "long": ""
+  },
+  {
+   "id": "l23",
+   "a": "liv",
+   "b": "snuggles",
+   "short": "zurechtgestutzt (Band 2)",
+   "long": "Liv und Mia schneiden den Buchsbaum-Pfau in Form – Florence ist danach endgültig gegen sie."
+  },
+  {
+   "id": "l24",
+   "a": "mia",
+   "b": "snuggles",
+   "short": "zurechtgestutzt",
+   "long": ""
+  },
+  {
+   "id": "l25",
+   "a": "bocker",
+   "b": "ann",
+   "short": "mag sie nicht",
+   "long": ""
+  },
+  {
+   "id": "l26",
+   "a": "bocker",
+   "b": "lottie",
+   "short": "mag sie nicht",
+   "long": ""
+  },
+  {
+   "id": "l27",
+   "a": "bocker",
+   "b": "emily",
+   "short": "mag sie",
+   "long": ""
+  },
+  {
+   "id": "l28",
+   "a": "dimbleby",
+   "b": "ernest",
+   "short": "Köchin",
+   "long": ""
+  },
+  {
+   "id": "l29",
+   "a": "dimbleby",
+   "b": "grayson",
+   "short": "kocht für ihn",
+   "long": ""
+  },
+  {
+   "id": "l30",
+   "a": "charles",
+   "b": "lottie",
+   "short": "verliebt in sie",
+   "long": "Liv prüft in seinem Traum, ob er es ernst meint."
+  },
+  {
+   "id": "l31",
+   "a": "liv",
+   "b": "charles",
+   "short": "schleicht in seinen Traum",
+   "long": ""
+  },
+  {
+   "id": "l32",
+   "a": "liv",
+   "b": "grayson",
+   "short": "Stiefgeschwister",
+   "long": "Er leiht ihr einen Pullover; Liv folgt ihm in seinen Traum."
+  },
+  {
+   "id": "l33",
+   "a": "mia",
+   "b": "grayson",
+   "short": "rettet sie (Band 2)",
+   "long": "Weckt Arthur, als Mia schlafwandelt."
+  },
+  {
+   "id": "l34",
+   "a": "liv",
+   "b": "florence",
+   "short": "Stiefschwester, feindselig",
+   "long": ""
+  },
+  {
+   "id": "l35",
+   "a": "mia",
+   "b": "florence",
+   "short": "enttarnt sie als Secrecy",
+   "long": ""
+  },
+  {
+   "id": "l36",
+   "a": "liv",
+   "b": "henry",
+   "short": "Liebe",
+   "long": "Erster Freund; Trennung in Band 2, Versöhnung in Band 3."
+  },
+  {
+   "id": "l37",
+   "a": "henry",
+   "b": "grayson",
+   "short": "beste Freunde",
+   "long": ""
+  },
+  {
+   "id": "l38",
+   "a": "henry",
+   "b": "amy",
+   "short": "Schwester",
+   "long": ""
+  },
+  {
+   "id": "l39",
+   "a": "henry",
+   "b": "milo",
+   "short": "Bruder",
+   "long": ""
+  },
+  {
+   "id": "l40",
+   "a": "amy",
+   "b": "milo",
+   "short": "Geschwister",
+   "long": ""
+  },
+  {
+   "id": "l41",
+   "a": "henry",
+   "b": "vaterh",
+   "short": "Vater",
+   "long": ""
+  },
+  {
+   "id": "l42",
+   "a": "vaterh",
+   "b": "amy",
+   "short": "Vater",
+   "long": ""
+  },
+  {
+   "id": "l43",
+   "a": "vaterh",
+   "b": "milo",
+   "short": "Vater",
+   "long": ""
+  },
+  {
+   "id": "l44",
+   "a": "ron",
+   "b": "henry",
+   "short": "Familie",
+   "long": ""
+  },
+  {
+   "id": "l45",
+   "a": "henry",
+   "b": "b",
+   "short": "im Traum mit ihr gesehen",
+   "long": ""
+  },
+  {
+   "id": "l46",
+   "a": "liv",
+   "b": "b",
+   "short": "Eifersucht",
+   "long": ""
+  },
+  {
+   "id": "l47",
+   "a": "arthur",
+   "b": "henry",
+   "short": "ehemalige Freunde",
+   "long": ""
+  },
+  {
+   "id": "l48",
+   "a": "arthur",
+   "b": "grayson",
+   "short": "ehemalige Freunde",
+   "long": ""
+  },
+  {
+   "id": "l49",
+   "a": "arthur",
+   "b": "jasper",
+   "short": "Freunde",
+   "long": ""
+  },
+  {
+   "id": "l50",
+   "a": "jasper",
+   "b": "grayson",
+   "short": "Freunde",
+   "long": ""
+  },
+  {
+   "id": "l51",
+   "a": "jasper",
+   "b": "henry",
+   "short": "Freunde",
+   "long": ""
+  },
+  {
+   "id": "l52",
+   "a": "arthur",
+   "b": "anabel",
+   "short": "Paar",
+   "long": ""
+  },
+  {
+   "id": "l53",
+   "a": "arthur",
+   "b": "liv",
+   "short": "Rache",
+   "long": "Will sich an Liv rächen und lenkt Menschen mit einem Codewort."
+  },
+  {
+   "id": "l54",
+   "a": "arthur",
+   "b": "mia",
+   "short": "lockt sie im Schlaf",
+   "long": "Gibt sich in Mias Träumen als Liv aus."
+  },
+  {
+   "id": "l55",
+   "a": "arthur",
+   "b": "lawrence",
+   "short": "manipuliert",
+   "long": ""
+  },
+  {
+   "id": "l56",
+   "a": "arthur",
+   "b": "persephone",
+   "short": "manipuliert (Pistole)",
+   "long": ""
+  },
+  {
+   "id": "l57",
+   "a": "arthur",
+   "b": "tote",
+   "short": "im Traum gefangen",
+   "long": ""
+  },
+  {
+   "id": "l58",
+   "a": "anabel",
+   "b": "liv",
+   "short": "wollte sie opfern",
+   "long": "Mausoleum am Herbstball (Band 1)."
+  },
+  {
+   "id": "l59",
+   "a": "anabel",
+   "b": "anabelmutter",
+   "short": "Mutter (Dämonenkult)",
+   "long": ""
+  },
+  {
+   "id": "l60",
+   "a": "anabel",
+   "b": "tod",
+   "short": "Psychiater, ins Koma manipuliert",
+   "long": ""
+  },
+  {
+   "id": "l61",
+   "a": "anabel",
+   "b": "henry",
+   "short": "hilft gegen Arthur",
+   "long": ""
+  },
+  {
+   "id": "l62",
+   "a": "persephone",
+   "b": "liv",
+   "short": "Freundinnen",
+   "long": "Anfangs Albtraum, später enge Freundin."
+  },
+  {
+   "id": "l63",
+   "a": "persephone",
+   "b": "jasper",
+   "short": "schwärmt für ihn",
+   "long": ""
+  },
+  {
+   "id": "l64",
+   "a": "persephone",
+   "b": "pandora",
+   "short": "Schwestern",
+   "long": ""
+  },
+  {
+   "id": "l65",
+   "a": "persephone",
+   "b": "priamos",
+   "short": "Geschwister",
+   "long": ""
+  },
+  {
+   "id": "l66",
+   "a": "pandora",
+   "b": "priamos",
+   "short": "Geschwister",
+   "long": ""
+  },
+  {
+   "id": "l67",
+   "a": "florence",
+   "b": "emily",
+   "short": "beste Freundinnen",
+   "long": ""
+  },
+  {
+   "id": "l68",
+   "a": "grayson",
+   "b": "emily",
+   "short": "Paar (bis Band 2)",
+   "long": ""
+  },
+  {
+   "id": "l69",
+   "a": "emily",
+   "b": "sam",
+   "short": "Geschwister",
+   "long": ""
+  },
+  {
+   "id": "l70",
+   "a": "florence",
+   "b": "secrecy",
+   "short": "führt den Blog weiter",
+   "long": ""
+  },
+  {
+   "id": "l71",
+   "a": "pandora",
+   "b": "secrecy",
+   "short": "schreibt mit",
+   "long": ""
+  },
+  {
+   "id": "l72",
+   "a": "sam",
+   "b": "secrecy",
+   "short": "schreibt mit",
+   "long": ""
+  },
+  {
+   "id": "l73",
+   "a": "secrecy",
+   "b": "liv",
+   "short": "lästert über „die Neue“",
+   "long": ""
+  },
+  {
+   "id": "l74",
+   "a": "mia",
+   "b": "secrecy",
+   "short": "deckt auf",
+   "long": ""
+  },
+  {
+   "id": "l75",
+   "a": "liv",
+   "b": "wu",
+   "short": "Kung-Fu-Lehrer",
+   "long": "Berkeley; im Traum Torwächter."
+  },
+  {
+   "id": "l76",
+   "a": "liv",
+   "b": "rasmus",
+   "short": "erfunden",
+   "long": ""
+  },
+  {
+   "id": "l77",
+   "a": "henry",
+   "b": "rasmus",
+   "short": "eifersüchtig",
+   "long": ""
+  },
+  {
+   "id": "l78",
+   "a": "lottie",
+   "b": "pascal",
+   "short": "verliebt",
+   "long": ""
+  },
+  {
+   "id": "l79",
+   "a": "pascal",
+   "b": "ann",
+   "short": "„plant“ die Hochzeit",
+   "long": ""
+  }
+ ],
+ "map": null
+}

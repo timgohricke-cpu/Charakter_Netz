@@ -437,11 +437,12 @@ def main():
             pg.get_by_role('button', name='Alles zeigen').click(); pg.wait_for_timeout(200)
             check('Detailstufe: „Alles zeigen“ -> wieder nah', pg.locator('.canvas').get_attribute('data-lod') == 'near')
             # Fraktionsinseln
-            check('Inseln: nur Charaktere mit genau dieser einen Fraktion (c10 hat zwei -> nicht dabei)', pg.locator('.island[data-faction="f1"] circle').count() == 2
-                  and pg.locator('.island[data-faction="f2"] circle').count() == 2 and pg.locator('.island-name').count() == 2)
+            # (seit 2.8 gewollt geändert: Insel = Hauptfraktion, d. h. erste Fraktion; c10 hat Ostlande zuerst -> nur in der Ostlande-Insel)
+            check('Inseln: jeder Charakter in der Insel seiner Hauptfraktion (c10: Ostlande, nicht Nordreich)', pg.locator('.island[data-faction="f1"] circle').count() == 2
+                  and pg.locator('.island[data-faction="f2"] circle').count() == 3 and pg.locator('.island-name').count() == 2)
             pg.evaluate("window.__db.characters.find(c => c.id === 'c11').x = 4000")
             pg.goto(U + '#/'); pg.wait_for_timeout(400); pg.goto(U + f'#/b/{BID}/netz'); pg.wait_for_timeout(700)
-            check('Inseln: weit entfernte Mitglieder bilden eigene Teilinsel (Verzweigung/Trennung)', pg.locator('.island-name').count() == 3 and pg.locator('.island[data-faction="f2"] line').count() == 0)
+            check('Inseln: weit entfernte Mitglieder bilden eigene Teilinsel (Verzweigung/Trennung)', pg.locator('.island-name').count() == 3 and pg.locator('.island[data-faction="f2"] line').count() == 1)
             pg.locator('.islands-btn').click(); pg.wait_for_timeout(150)
             check('Inseln: ausschaltbar (und gemerkt)', pg.locator('.island').count() == 0 and pg.evaluate("localStorage.getItem('cn-islands')") == '0')
             pg.reload(); pg.wait_for_timeout(700)
@@ -452,7 +453,10 @@ def main():
             before = pg.evaluate("() => Object.fromEntries(window.__db.characters.filter(c => c.board_id === '" + BID + "').map(c => [c.id, [c.x, c.y]]))")
             n0 = len(pg.evaluate('window.__calls'))
             pg.locator('.arrange-btn').click(); pg.wait_for_timeout(200)
-            check('Anordnen: fragt vorher nach', pg.locator('.modal h2').inner_text() == 'Alle Charaktere anordnen?')
+            check('Anordnen: fragt vorher nach (nach Fraktionsinseln)', pg.locator('.modal h2').inner_text() == 'Alle Charaktere anordnen?' and 'Fraktionsinseln' in pg.inner_text('.modal'))
+            pg.locator('.modal button:has-text("Abbrechen")').click(); pg.wait_for_timeout(200)
+            check('Anordnen: „Abbrechen“ ändert nichts', pg.locator('.modal').count() == 0 and not [c for c in pg.evaluate('window.__calls')[n0:] if c[0] == 'update'])
+            pg.locator('.arrange-btn').click(); pg.wait_for_timeout(200)
             pg.locator('.modal button:has-text("Anordnen")').click(); pg.wait_for_timeout(1500)
             calls = [c for c in pg.evaluate('window.__calls')[n0:] if c[0] == 'update' and c[1] == 'characters']
             nodes = pg.evaluate("() => [...document.querySelectorAll('.node')].map(n => { const m = n.getAttribute('transform').match(/-?[\\d.]+/g).map(Number); return [n.dataset.char, m[0], m[1], +n.querySelector('.node-bg').getAttribute('r')]; })")
@@ -460,7 +464,12 @@ def main():
             P = {n[0]: n[1:3] for n in nodes}
             check(f'Anordnen: gespeichert ({len(calls)} Positionen), kein Kreis überlappt (Abstand ≥ {gapmin:.0f} px)', len(calls) >= 25 and gapmin >= 40)
             check('Anordnen: Fraktionsmitglieder liegen beieinander', math.dist(P['c0'], P['c1']) < math.dist(P['c0'], P['c11']) and math.dist(P['c4'], P['c11']) < math.dist(P['c4'], P['c1']))
-            check('Anordnen: Charakter mit zwei Fraktionen liegt zwischen den Gruppen', math.dist(P['c10'], P['c1']) < math.dist(P['c11'], P['c1']) and math.dist(P['c10'], P['c11']) < math.dist(P['c1'], P['c11']))
+            # (seit 2.8 gewollt geändert: c10 gehört zur Ostlande-Insel und liegt an deren Rand Richtung Nordreich)
+            nord = ((P['c0'][0] + P['c1'][0]) / 2, (P['c0'][1] + P['c1'][1]) / 2)
+            check('Anordnen: Charakter mit zwei Fraktionen am Rand seiner Hauptinsel, zur anderen Fraktion hin', math.dist(P['c10'], nord) < min(math.dist(P['c4'], nord), math.dist(P['c11'], nord))
+                  and math.dist(P['c10'], P['c11']) < math.dist(P['c10'], nord))
+            names = pg.locator('.island-name').evaluate_all('ts => ts.map(t => t.textContent)')
+            check('Anordnen: genau eine Insel je Fraktion (keine Teilinseln)', sorted(names) == ['Nordreich', 'Ostlande'], names)
             check('Anordnen: „↶ Rückgängig“ erscheint', pg.locator('.undo-btn').count() == 1)
             pg.screenshot(path=os.path.join(OUT, 'angeordnet.png'))
             pg.locator('.undo-btn').click(); pg.wait_for_timeout(1500)
@@ -473,6 +482,22 @@ def main():
                 let g = 1e9; const ids = [...p.keys()]; for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const a = p.get(ids[i]), b = p.get(ids[j]); g = Math.min(g, Math.hypot(a.x - b.x, a.y - b.y) - r(ids[i]) - r(ids[j])); }
                 return [p.size, ms, g]; }""")
             check(f'Anordnen groß: 400 Charaktere in {big[1]:.0f} ms, ohne Überlappung (Abstand {big[2]:.0f})', big[0] == 400 and big[1] < 3000 and big[2] >= 40)
+            # Realistisches Board (Silber-Trilogie, 59 Charaktere, viele Mehrfach-Fraktionen): eine Insel je Fraktion, keine Überlappung
+            silber = open(os.path.join(ROOT, 'tests', 'data', 'silber.json'), encoding='utf-8').read()
+            sv = pg.evaluate("""(txt) => { const b = JSON.parse(txt); const ch = b.characters.map(c => ({ id: c.id, name: c.name, factionIds: c.factions }));
+                const p = window.__cnLayout(ch, b.links, b.factions);
+                const deg = {}; for (const l of b.links) { deg[l.a] = (deg[l.a] || 0) + 1; deg[l.b] = (deg[l.b] || 0) + 1; } const r = (id) => Math.min(52, Math.round(32 + 4.5 * Math.sqrt(deg[id] || 0)));
+                let g = 1e9; const ids = [...p.keys()]; for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const a = p.get(ids[i]), q = p.get(ids[j]); g = Math.min(g, Math.hypot(a.x - q.x, a.y - q.y) - r(ids[i]) - r(ids[j])); }
+                const split = []; for (const f of b.factions) { const m = ch.filter(c => c.factionIds[0] === f.id).map(c => p.get(c.id)); const n = m.length; if (!n) continue;
+                  const inT = Array(n).fill(false), best = Array(n).fill(Infinity); best[0] = 0; let comps = 1;
+                  for (let k = 0; k < n; k++) { let u = -1; for (let i = 0; i < n; i++) if (!inT[i] && (u < 0 || best[i] < best[u])) u = i; inT[u] = true; if (k && best[u] > 430) comps++;
+                    for (let v = 0; v < n; v++) if (!inT[v]) best[v] = Math.min(best[v], Math.hypot(m[u].x - m[v].x, m[u].y - m[v].y)); }
+                  if (comps > 1) split.push(f.name); }
+                return [p.size, g, split]; }""", silber)
+            check(f'Anordnen Silber-Board: {sv[0]} Charaktere, eine Insel je Fraktion, ohne Überlappung (Abstand {sv[1]:.0f})', sv[0] == 59 and not sv[2] and sv[1] >= 40, sv[2])
+            N('c0').click(); pg.wait_for_timeout(300); pg.locator('.modal button:has-text("Bearbeiten")').click(); pg.wait_for_timeout(300)
+            check('Charakter-Formular: Hinweis „erste Fraktion = Hauptfraktion (Insel)“', 'Hauptfraktion' in pg.locator('.hint-main-faction').inner_text())
+            pg.keyboard.press('Escape'); pg.wait_for_timeout(100)
             pg.goto(U + f'#/b/{BID2}/netz'); pg.wait_for_timeout(700)
             check('Besucher: Inseln-Schalter ja, Anordnen nein', pg.locator('.islands-btn').count() == 1 and pg.locator('.arrange-btn').count() == 0)
             ctx.close()
@@ -480,6 +505,52 @@ def main():
             pg.goto(U + f'#/b/{BID}/netz'); pg.wait_for_timeout(800)
             check('Handy: Werkzeugleiste mit neuen Knöpfen ohne seitliches Scrollen', pg.evaluate('document.documentElement.scrollWidth') <= 375 and pg.locator('.islands-btn').is_visible())
             pg.screenshot(path=os.path.join(OUT, 'handy_netz_inseln.png'))
+            ctx.close()
+
+        # ================= 9. Ersteller übertragen (seit 2.8) =================
+        def transfer_owner(mobile):
+            tag = 'Handy' if mobile else 'Desktop'
+            ctx = context(**MOBILE) if mobile else context(); pg = page(ctx)
+            pg.goto(U + f'#/b/{BID}/netz'); pg.wait_for_timeout(700)
+            pg.locator('.share-btn').click(); pg.wait_for_timeout(500)
+            mem = pg.locator('.modal .member')
+            check(f'Übertragen {tag}: Mitgliederliste mit Ersteller + 2 Besuchern', mem.count() == 3 and 'Ersteller (du)' in mem.nth(0).inner_text() and 'test_ersteller' in mem.nth(0).inner_text()
+                  and mem.nth(0).locator('.transfer-btn').count() == 0 and pg.locator('.modal .transfer-btn').count() == 2, [mem.nth(i).inner_text() for i in range(mem.count())])
+            check(f'Übertragen {tag}: Knopf je Besucher mit Namen (barrierefrei)', pg.locator('.modal button[aria-label="test_besucher zum Ersteller machen"]').count() == 1
+                  and pg.locator('.modal button[aria-label="さくら zum Ersteller machen"]').count() == 1)
+            check(f'Übertragen {tag}: Teilen-Dialog passt in die Breite', pg.evaluate('document.documentElement.scrollWidth') <= (375 if mobile else 1200))
+            pg.screenshot(path=os.path.join(OUT, f'mitglieder_{tag.lower()}.png'))
+            pg.locator('.modal button[aria-label="test_besucher zum Ersteller machen"]').click(); pg.wait_for_timeout(300)
+            yes = pg.locator('.modal .transfer-yes')
+            check(f'Übertragen {tag}: Rückfrage mit Namen und Folgen', pg.locator('.modal h2').inner_text() == 'Ersteller übertragen?' and 'test_besucher' in pg.inner_text('.modal')
+                  and 'nur noch ansehen' in pg.inner_text('.modal'))
+            check(f'Übertragen {tag}: Bestätigen erst nach Häkchen möglich', yes.is_disabled())
+            check(f'Übertragen {tag}: Rückfrage passt in die Breite', pg.evaluate('document.documentElement.scrollWidth') <= (375 if mobile else 1200))
+            pg.screenshot(path=os.path.join(OUT, f'uebertragen_{tag.lower()}.png'))
+            pg.locator('.modal button:has-text("Abbrechen")').click(); pg.wait_for_timeout(500)
+            check(f'Übertragen {tag}: „Abbrechen“ -> zurück zum Teilen-Dialog, nichts übertragen', pg.locator('.modal h2').inner_text() == 'Zum Board einladen'
+                  and not [c for c in pg.evaluate('window.__calls') if c[0] == 'rpc' and c[1] == 'transfer_board_owner'])
+            if not mobile:  # Fehler vom Server -> deutsche Meldung, nichts ändert sich
+                pg.evaluate("window.__transferFail = 'new_owner_no_access'")
+                pg.locator('.modal button[aria-label="さくら zum Ersteller machen"]').click(); pg.wait_for_timeout(300)
+                pg.locator('.modal .transfer-ok').check(); pg.locator('.modal .transfer-yes').click(); pg.wait_for_timeout(400)
+                check('Übertragen: Server lehnt ab -> deutsche Meldung, Board bleibt bearbeitbar', 'muss es zuerst über den Einladungslink öffnen' in pg.inner_text('body')
+                      and pg.evaluate(f"window.__db.boards.find(b => b.id === '{BID}').owner_id") == 'u-owner' and pg.locator('.share-btn').count() == 1)
+                pg.evaluate('window.__transferFail = null'); pg.keyboard.press('Escape'); pg.wait_for_timeout(100)
+                pg.locator('.share-btn').click(); pg.wait_for_timeout(500)
+                pg.locator('.modal button[aria-label="test_besucher zum Ersteller machen"]').click(); pg.wait_for_timeout(300)
+            else:
+                pg.locator('.modal button[aria-label="test_besucher zum Ersteller machen"]').click(); pg.wait_for_timeout(300)
+            pg.locator('.modal .transfer-ok').check()
+            check(f'Übertragen {tag}: nach Häkchen bestätigbar', not pg.locator('.modal .transfer-yes').is_disabled())
+            pg.locator('.modal .transfer-yes').click(); pg.wait_for_timeout(900)
+            rpc = [c for c in pg.evaluate('window.__calls') if c[0] == 'rpc' and c[1] == 'transfer_board_owner']
+            check(f'Übertragen {tag}: Server-Funktion mit Board und neuem Ersteller aufgerufen', rpc and rpc[-1][2] == {'p_board': BID, 'p_new_owner': 'u-vis'}, rpc)
+            check(f'Übertragen {tag}: Dialog zu, Board jetzt nur ansehen (von test_besucher)', pg.locator('.modal').count() == 0 and 'Nur ansehen' in pg.inner_text('.topbar')
+                  and 'test_besucher' in pg.inner_text('.topbar') and pg.locator('.share-btn').count() == 0 and pg.locator('.arrange-btn').count() == 0)
+            pg.goto(U + '#/'); pg.wait_for_timeout(700)
+            check(f'Übertragen {tag}: Board unter „Mit mir geteilt“, nicht mehr unter „Meine Boards“', pg.locator('.board-card.shared:has-text("Testprojekt")').count() == 1
+                  and pg.locator('.board-card:not(.shared):has-text("Testprojekt")').count() == 0)
             ctx.close()
 
         section('Grundfunktionen', basics)
@@ -490,6 +561,8 @@ def main():
         section('Handy-Ansichten', mobile_views)
         section('Verstorbene + Auswahl', selection)
         section('Übersicht', overview)
+        section('Ersteller übertragen Desktop', transfer_owner, False)
+        section('Ersteller übertragen Handy', transfer_owner, True)
         section('Updates', updates)
         b.close()
     srv.shutdown()

@@ -26,7 +26,7 @@
   const SB_KEY = String(CFG.SUPABASE_KEY || '');
   const EMAIL_DOMAIN = String(CFG.EMAIL_DOMAIN || 'users.charakter-netz.app');
   const BUCKET = 'board-images';
-  const APP_VERSION = '2.7'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
+  const APP_VERSION = '2.8'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
   const CONFIGURED = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(SB_URL) && SB_KEY.length > 20 && !!window.supabase;
   // Benutzernamen: 2–24 Zeichen, Buchstaben/Ziffern . _ - sowie Japanisch (Hiragana, Katakana, Kanji).
   // Muss zu private.cn_username_ok() in supabase/schema.sql passen.
@@ -217,6 +217,9 @@
     if (status === 429 || /rate limit|too many/i.test(m)) return 'Zu viele Versuche. Bitte warte einen Moment und versuche es dann erneut.';
     if (/JWT|session.*(missing|expired)|refresh token/i.test(m)) return 'Deine Anmeldung ist abgelaufen. Bitte melde dich erneut an.';
     if (code === '42501' || /row-level security|permission denied|not_owner|no_permission/i.test(m)) return 'Dafür hast du keine Berechtigung.';
+    if (/new_owner_no_access/.test(m)) return 'Diese Person hat keinen Zugriff auf das Board. Sie muss es zuerst über den Einladungslink öffnen.';
+    if (/invalid_new_owner/.test(m)) return 'An diese Person kann das Board nicht übertragen werden.';
+    if (/limit_boards_new_owner/.test(m)) return 'Diese Person hat schon die Höchstzahl von 200 Boards.';
     if (/limit_boards/.test(m)) return 'Du hast die Höchstzahl von 200 Boards erreicht.';
     if (/limit_characters/.test(m)) return 'Dieses Board hat die Höchstzahl von 2000 Charakteren erreicht.';
     if (/limit_factions/.test(m)) return 'Ein Board kann höchstens 50 Fraktionen haben.';
@@ -387,43 +390,45 @@
   const layoutUndo = new Map(); // Board-ID -> Positionen vor „✨ Anordnen“ (nur in diesem Fenster)
 
   // ---------- Automatisch anordnen ----------
-  // Jede Fraktion (und jede Kombination mehrerer Fraktionen) wird eine gleichmäßige Gruppe im Sonnenblumen-Muster,
-  // die Wichtigsten in der Mitte. Die Gruppen werden wie Kreise dicht gepackt: Gruppen mit vielen Verbindungen
-  // zueinander und Kombinationen neben ihren Fraktionen. Charaktere ohne Fraktion bilden eine eigene Gruppe.
-  // Danach entzerrt eine kurze Kräfte-Simulation (Verbindungen ziehen leicht, Gruppen halten zusammen,
-  // kein Kreis überlappt einen anderen). Ohne Zufall: gleiche Daten -> gleiche Anordnung.
+  // Nach Fraktionsinseln: Jeder Charakter gehört zur Insel seiner Hauptfraktion (der ersten Fraktion in seiner Liste);
+  // so entsteht genau eine kompakte Gruppe je Fraktion (Sonnenblumen-Muster, die Wichtigsten in der Mitte).
+  // Charaktere mit weiteren Fraktionen liegen am Inselrand auf der Seite, die zu diesen Fraktionen zeigt.
+  // Die Inseln werden wie Kreise dicht gepackt: Inseln mit vielen Verbindungen / gemeinsamen Mitgliedern nebeneinander.
+  // Charaktere ohne Fraktion bilden eine eigene Gruppe. Danach entzerrt eine kurze Kräfte-Simulation
+  // (Verbindungen ziehen leicht, jeder bleibt nahe seinem Platz, kein Kreis überlappt einen anderen).
+  // Ohne Zufall: gleiche Daten -> gleiche Anordnung.
   function autoLayout(chars, links, factions) {
     const out = new Map(); const n = chars.length;
     if (!n) return out;
     const fIds = new Set(factions.map((f) => f.id));
-    const facsOf = (c) => [...new Set((c.factionIds || []).filter((f) => fIds.has(f)))].sort();
+    const facsOf = (c) => [...new Set((c.factionIds || []).filter((f) => fIds.has(f)))]; // Reihenfolge bleibt: [0] = Hauptfraktion
     const deg = new Map();
     for (const l of links) { deg.set(l.a, (deg.get(l.a) || 0) + 1); deg.set(l.b, (deg.get(l.b) || 0) + 1); }
-    const S = 150; const GAP = 150;
+    const S = 150; const GAP = 170;
     const groups = new Map(); const keyOf = new Map();
-    for (const c of chars) { const k = facsOf(c).join('+'); keyOf.set(c.id, k); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
+    for (const c of chars) { const k = facsOf(c)[0] || ''; keyOf.set(c.id, k); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
     const keys = [...groups.keys()].sort((x, y) => groups.get(y).length - groups.get(x).length || x.localeCompare(y));
     const gi = new Map(keys.map((k, i) => [k, i])); const G = keys.length;
-    // Verwandtschaft der Gruppen: Verbindungen zwischen ihnen + gemeinsame Fraktionen
+    // Verwandtschaft der Inseln: Verbindungen zwischen ihnen + Mitglieder, die auch zur anderen Fraktion gehören
     const W = Array.from({ length: G }, () => new Float64Array(G));
     for (const l of links) {
       const a = keyOf.get(l.a), b = keyOf.get(l.b);
       if (a == null || b == null || a === b) continue;
       W[gi.get(a)][gi.get(b)] += 1; W[gi.get(b)][gi.get(a)] += 1;
     }
-    const fsOf = keys.map((k) => new Set(k ? k.split('+') : []));
-    for (let i = 0; i < G; i++) for (let j = i + 1; j < G; j++) {
-      let sh = 0; for (const f of fsOf[i]) if (fsOf[j].has(f)) sh++;
-      if (sh) { const v = sh * 2 * Math.min(groups.get(keys[i]).length, groups.get(keys[j]).length) + 3 * sh; W[i][j] += v; W[j][i] += v; }
+    const others = new Map(); // Charakter -> Gruppen-Indizes seiner weiteren Fraktionen
+    for (const c of chars) {
+      const i = gi.get(keyOf.get(c.id)); const o = [];
+      for (const f of facsOf(c).slice(1)) { const j = gi.get(f); if (j != null && j !== i) { o.push(j); W[i][j] += 4; W[j][i] += 4; } }
+      others.set(c.id, o);
     }
     const rc = keys.map((k) => 40 + 0.62 * S * Math.sqrt(groups.get(k).length));
-    // Start: Gruppen auf einer Spirale (größte innen), dann Kreis-Packung mit Anziehung verwandter Gruppen
+    // Start: Inseln auf einer Spirale (größte innen), dann Kreis-Packung mit Anziehung verwandter Inseln
     const GA = Math.PI * (3 - Math.sqrt(5));
     const cx = new Float64Array(G), cy = new Float64Array(G);
     const meanR = rc.reduce((a, b) => a + b, 0) / G;
     for (let i = 0; i < G; i++) { const r = (meanR + GAP) * 1.1 * Math.sqrt(i); cx[i] = r * Math.cos(i * GA); cy[i] = r * Math.sin(i * GA); }
     let wMax = 0; for (let i = 0; i < G; i++) for (let j = 0; j < G; j++) wMax = Math.max(wMax, W[i][j]);
-    const parentsOf = fsOf.map((fs) => (fs.size > 1 ? [...fs].map((f) => gi.get(f)).filter((j) => j != null) : []));
     for (let it = 0; it < 500 && G > 1; it++) {
       const cool = 1 - it / 500; const fx = new Float64Array(G), fy = new Float64Array(G);
       for (let i = 0; i < G; i++) {
@@ -437,26 +442,31 @@
           fx[i] += (dx / d) * f; fy[i] += (dy / d) * f; fx[j] -= (dx / d) * f; fy[j] -= (dy / d) * f;
         }
       }
-      // Kombinationen (mehrere Fraktionen) zwischen ihre einzelnen Fraktionen ziehen
-      for (let i = 0; i < G; i++) {
-        const parts = parentsOf[i]; if (!parts.length) continue;
-        let mx = 0, my = 0; for (const j of parts) { mx += cx[j]; my += cy[j]; }
-        fx[i] += (mx / parts.length - cx[i]) * 0.06; fy[i] += (my / parts.length - cy[i]) * 0.06;
-      }
       const lim = 10 + 120 * cool;
       for (let i = 0; i < G; i++) { cx[i] += clamp(fx[i], -lim, lim); cy[i] += clamp(fy[i], -lim, lim); }
     }
-    // Startpositionen der Charaktere im Sonnenblumen-Muster ihrer Gruppe
+    // Plätze der Charaktere: Sonnenblumen-Muster je Insel. Charaktere nur dieser Fraktion innen (Wichtigste zuerst),
+    // Charaktere mit weiteren Fraktionen bekommen die äußeren Plätze, die am besten zu ihren anderen Inseln zeigen.
     const ids = []; const X = []; const Y = []; const TX = []; const TY = []; const RAD = [];
     keys.forEach((k, g) => {
-      const m = groups.get(k).slice().sort((a, b) => (deg.get(b.id) || 0) - (deg.get(a.id) || 0) || collator.compare(a.name, b.name));
-      m.forEach((c, i) => {
-        const r = S * 0.62 * Math.sqrt(i + 0.5);
-        ids.push(c.id); X.push(cx[g] + r * Math.cos(i * GA)); Y.push(cy[g] + r * Math.sin(i * GA)); TX.push(cx[g]); TY.push(cy[g]); RAD.push(radiusFor(deg.get(c.id)));
-      });
+      const byImp = (a, b) => (deg.get(b.id) || 0) - (deg.get(a.id) || 0) || collator.compare(a.name, b.name) || (a.id < b.id ? -1 : 1);
+      const mem = groups.get(k);
+      const pure = mem.filter((c) => !others.get(c.id).length).sort(byImp);
+      const mixed = mem.filter((c) => others.get(c.id).length).sort(byImp);
+      const slots = mem.map((_, i) => { const r = S * 0.62 * Math.sqrt(i + 0.5); return { x: cx[g] + r * Math.cos(i * GA), y: cy[g] + r * Math.sin(i * GA), a: i * GA }; });
+      const place = (c, s) => { ids.push(c.id); X.push(s.x); Y.push(s.y); TX.push(s.x); TY.push(s.y); RAD.push(radiusFor(deg.get(c.id))); };
+      pure.forEach((c, i) => place(c, slots[i]));
+      const free = slots.slice(pure.length);
+      for (const c of mixed) {
+        let mx = 0, my = 0; for (const j of others.get(c.id)) { mx += cx[j] - cx[g]; my += cy[j] - cy[g]; }
+        const want = Math.atan2(my, mx); let best = 0, bv = -Infinity;
+        free.forEach((s, i) => { const v = Math.cos(s.a - want) + i * 0.001; if (v > bv) { bv = v; best = i; } });
+        place(c, free.splice(best, 1)[0]);
+      }
     });
     const N = ids.length; const ix = new Map(ids.map((id, i) => [id, i]));
     const E = links.map((l) => [ix.get(l.a), ix.get(l.b)]).filter(([a, b]) => a != null && b != null && a !== b);
+    const DG = new Float64Array(N).fill(0); for (const [a, b] of E) { DG[a]++; DG[b]++; } for (let i = 0; i < N; i++) DG[i] = Math.max(1, Math.sqrt(DG[i]));
     const gap = 64; const CELL = 2 * 52 + gap + 40;
     const collide = (strength, fx, fy) => {
       const grid = new Map();
@@ -484,9 +494,9 @@
     for (let it = 0; it < IT; it++) {
       const cool = 1 - it / IT; const fx = new Float64Array(N); const fy = new Float64Array(N);
       for (let i = 0; i < N; i++) { fx[i] += (TX[i] - X[i]) * 0.035; fy[i] += (TY[i] - Y[i]) * 0.035; }
-      for (const [a, b] of E) {
+      for (const [a, b] of E) { // Zug je Charakter durch seine Verbindungszahl geteilt: Viel-Verbundene bleiben auf ihrer Insel
         const dx = X[b] - X[a], dy = Y[b] - Y[a]; const d = Math.hypot(dx, dy) || 1;
-        if (d > 230) { const f = ((d - 230) / d) * 0.004; fx[a] += dx * f; fy[a] += dy * f; fx[b] -= dx * f; fy[b] -= dy * f; }
+        if (d > 230) { const f = ((d - 230) / d) * 0.004; fx[a] += dx * f / DG[a]; fy[a] += dy * f / DG[a]; fx[b] -= dx * f / DG[b]; fy[b] -= dy * f / DG[b]; }
       }
       collide(0.5, fx, fy);
       const lim = 6 + 40 * cool;
@@ -964,9 +974,14 @@
     const visitors = el('ul', { class: 'link-list' }, el('li', { class: 'muted', text: 'Lädt …' }));
     const loadVisitors = async () => {
       try {
-        const v = await q(sb.from('board_visits').select('visited_at,user:profiles!board_visits_user_id_fkey(username)').eq('board_id', bid).order('visited_at', { ascending: false }));
-        visitors.replaceChildren(...(v.length ? v.map((x) => el('li', {}, el('strong', { text: (x.user && x.user.username) || '?' }), el('span', { class: 'muted', text: ' · ' + new Date(x.visited_at).toLocaleDateString('de-DE') })))
-          : [el('li', { class: 'muted', text: 'Noch niemand hat das Board über den Link geöffnet.' })]));
+        const v = await q(sb.from('board_visits').select('user_id,visited_at,user:profiles!board_visits_user_id_fkey(username)').eq('board_id', bid).order('visited_at', { ascending: false }));
+        const owner = el('li', { class: 'member owner' }, el('strong', { text: me ? me.username : '?' }), el('span', { class: 'muted', text: ' · 👑 Ersteller (du)' }));
+        visitors.replaceChildren(owner, ...(v.length ? v.map((x) => {
+          const uname = (x.user && x.user.username) || '?';
+          const tb = btn('👑 Zum Ersteller machen', () => transferDialog(bid, name, x.user_id, uname), 'ghost small transfer-btn');
+          tb.setAttribute('aria-label', `${uname} zum Ersteller machen`);
+          return el('li', { class: 'member' }, el('span', { class: 'member-name' }, el('strong', { text: uname }), el('span', { class: 'muted', text: ' · Besucher seit ' + new Date(x.visited_at).toLocaleDateString('de-DE') })), tb);
+        }) : [el('li', { class: 'muted', text: 'Noch niemand hat das Board über den Link geöffnet.' })]));
       } catch { visitors.replaceChildren(el('li', { class: 'muted', text: 'Konnte nicht geladen werden.' })); }
     };
     const reset = (removeAll) => async () => {
@@ -981,11 +996,31 @@
       el('p', { text: `Schicke diesen Link an Mitspieler. Wer ihn öffnet, installiert bei Bedarf die App, meldet sich an oder registriert sich – danach ist „${name}“ in seinem Konto unter „Mit mir geteilt“ (nur ansehen).` }),
       inp,
       shareButtons(() => ({ title: `Einladung: ${name}`, text: `Ich lade dich zu meinem Board „${name}“ in Charakter-Netz ein:`, url: link })),
-      el('fieldset', {}, el('legend', { text: 'Wer hat Zugriff?' }), visitors,
+      el('fieldset', {}, el('legend', { text: 'Mitglieder – wer hat Zugriff?' }), visitors,
         el('p', { class: 'muted', text: 'Wenn der Link in falsche Hände geraten ist: Erzeuge einen neuen Link. Der alte wird sofort ungültig.' }),
         el('div', { class: 'row' }, r1, r2)))
     , [btn('Fertig', closeModal, 'primary')]);
     loadVisitors();
+  }
+
+  // Ersteller übertragen: nur an jemanden, der das Board schon geöffnet hat (steht in der Besucherliste).
+  // Der bisherige Ersteller wird danach Besucher (Nur-Lesen). Der Server prüft alles noch einmal (transfer_board_owner).
+  function transferDialog(bid, name, uid, uname) {
+    const ok = el('input', { type: 'checkbox', class: 'transfer-ok' });
+    const yes = btn('👑 Ersteller übertragen', () => busy(yes, async () => {
+      await q(sb.rpc('transfer_board_owner', { p_board: bid, p_new_owner: uid }));
+      closeModal();
+      toast(`${uname} ist jetzt Ersteller von „${name}“. Du findest das Board unter „Mit mir geteilt“.`);
+      if (board && board.id === bid) { board = null; netT.delete(bid); layoutUndo.delete(bid); }
+      route();
+    }).catch((e) => toast(errMsg(e))), 'danger-bg transfer-yes');
+    yes.disabled = true;
+    ok.addEventListener('change', () => { yes.disabled = !ok.checked; });
+    modal('Ersteller übertragen?', el('div', { class: 'form' },
+      el('p', {}, el('strong', { text: uname }), el('span', { text: ` wird Ersteller von „${name}“ und kann es dann bearbeiten, teilen, umbenennen und löschen.` })),
+      el('p', { text: 'Du verlierst die Bearbeitungsrechte und kannst das Board danach nur noch ansehen (unter „Mit mir geteilt“). Zurückübertragen kann es nur der neue Ersteller.' }),
+      el('label', { class: 'check' }, ok, el('span', { text: ' Ich habe verstanden, dass ich das Board danach nicht mehr bearbeiten kann.' }))),
+    [btn('Abbrechen', () => shareDialog(bid, name), 'ghost'), yes]);
   }
 
   // ---------- Import / Export ----------
@@ -1315,7 +1350,7 @@
       el('div', { class: 'form-img' }, preview, el('div', { class: 'col' }, el('label', { class: 'btn small' }, 'Bild wählen', file), rmImg)),
       field('Name', name),
       field('Kurzbeschreibung', short),
-      el('div', { class: 'field' }, el('span', { text: 'Fraktionen (optional, auch mehrere)' }), picker),
+      el('div', { class: 'field' }, el('span', { text: 'Fraktionen (optional, auch mehrere)' }), picker, el('small', { class: 'muted hint-main-faction', text: 'Die erste Fraktion ist die Hauptfraktion: Sie bestimmt die Fraktionsinsel.' })),
       el('small', { class: 'muted', text: 'Tippen, um bestehende Fraktionen vorzuschlagen, oder einen neuen Namen eingeben und Enter drücken. Farben änderst du über „🎨 Fraktionen“.' }),
       el('label', { class: 'check' }, dead, el('span', { text: 'Verstorben (wird verblasst dargestellt)' })),
       field('Infos', info),
@@ -1740,8 +1775,9 @@
         if (free) put({ x0, y0, x1, y1 }, x0, y0, x1, y1);
       }
     }
-    // Fraktionsinseln: zart gefärbte Fläche um alle Charaktere, die genau diese eine Fraktion haben.
-    // Verzweigt entlang des kürzesten Verbindungsbaums; weit entfernte Gruppen werden eigene Inseln.
+    // Fraktionsinseln: zart gefärbte Fläche um alle Charaktere mit dieser Hauptfraktion (erste Fraktion in ihrer Liste) –
+    // jeder Charakter gehört höchstens zu einer Insel. Verzweigt entlang des kürzesten Verbindungsbaums;
+    // weit entfernte Gruppen werden eigene Inseln (nach „✨ Anordnen“ gibt es je Fraktion genau eine).
     let islandsOn = store('cn-islands') !== '0';
     let islandRaf = 0;
     function drawIslands() {
@@ -1750,7 +1786,7 @@
       const MAXD = 430;
       for (const f of board.factions) {
         if (!COLOR_RE.test(f.color)) continue;
-        const mem = board.characters.filter((c) => (c.factionIds || []).length === 1 && c.factionIds[0] === f.id);
+        const mem = board.characters.filter((c) => (c.factionIds || [])[0] === f.id);
         if (!mem.length) continue;
         const n = mem.length; const inT = new Array(n).fill(false); const best = new Array(n).fill(Infinity); const par = new Array(n).fill(-1);
         const root = Array.from({ length: n }, (_, i) => i); const find = (i) => (root[i] === i ? i : (root[i] = find(root[i])));
@@ -1969,7 +2005,7 @@
       await Promise.all(Array.from({ length: Math.min(6, todo.length) }, worker));
     }
     const arrangeBtn = canEdit() && board.characters.length > 1 ? btn([el('span', { text: '✨' }), el('span', { class: 'lbl', text: ' Anordnen' })], () => confirmBox('Alle Charaktere anordnen?',
-      `Alle ${board.characters.length} Charaktere werden nach Fraktionen gruppiert und gleichmäßig neu angeordnet (Charaktere mit mehreren Fraktionen zwischen ihren Gruppen). Mit „↶ Rückgängig“ kannst du die bisherige Anordnung wiederherstellen, solange du die Seite nicht neu lädst.`,
+      `Alle ${board.characters.length} Charaktere werden nach Fraktionsinseln geordnet: jede Fraktion wird eine Insel (zugeordnet nach der ersten Fraktion eines Charakters), Charaktere mit weiteren Fraktionen liegen am Inselrand zu diesen hin, verwandte Inseln nebeneinander. Mit „↶ Rückgängig“ kannst du die bisherige Anordnung wiederherstellen, solange du die Seite nicht neu lädst.`,
       'Anordnen', async () => {
         const prev = new Map(board.characters.map((c) => [c.id, { x: c.x, y: c.y }]));
         const pos = autoLayout(board.characters, board.links, board.factions);
@@ -1977,7 +2013,7 @@
         try { await savePositions(pos); } finally { netT.delete(board.id); renderBoard(); }
         toast('Angeordnet. „↶ Rückgängig“ stellt die vorherige Anordnung wieder her.');
       }), 'small arrange-btn') : null;
-    if (arrangeBtn) arrangeBtn.title = 'Alle Charaktere nach Fraktionen anordnen';
+    if (arrangeBtn) arrangeBtn.title = 'Alle Charaktere nach Fraktionsinseln anordnen';
     const undoBtn = canEdit() && layoutUndo.has(board.id) ? btn('↶ Rückgängig', () => busy(undoBtn, async () => {
       const prev = layoutUndo.get(board.id);
       try { await savePositions(prev); layoutUndo.delete(board.id); } catch (e) { toast(errMsg(e)); } finally { netT.delete(board.id); renderBoard(); }

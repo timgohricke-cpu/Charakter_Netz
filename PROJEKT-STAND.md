@@ -1,4 +1,4 @@
-# Charakter-Netz – Projektstand (Version 2.7)
+# Charakter-Netz – Projektstand (Version 2.8)
 
 Diese Datei beschreibt den aktuellen Stand, damit die Arbeit in einem neuen Chat nahtlos weitergehen kann.
 **Hier stehen keine Passwörter oder geheimen Schlüssel – und das soll so bleiben (das Repo ist öffentlich).**
@@ -26,7 +26,7 @@ Statische PWA ohne Build-Schritt und ohne externe Bibliotheken zur Laufzeit, geh
 | `config.js` | Supabase-URL, öffentlicher *publishable key*, `EMAIL_DOMAIN` |
 | `app.js` | Gesamte App (ca. 1600 Zeilen, ein IIFE, kein Framework) |
 | `style.css` | Design inkl. Hell-/Dunkelmodus über CSS-Variablen (`:root` / `:root[data-theme=light]`) |
-| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v7`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.7) |
+| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v8`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.8) |
 | `vendor/supabase.js` | `@supabase/supabase-js` 2.119.2, lokal mit esbuild gebündelt (IIFE, global `supabase`) |
 | `supabase/schema.sql` | Komplettes Datenbank-Skript; **idempotent** (kann jederzeit erneut ausgeführt werden) |
 | `manifest.webmanifest`, Icons | Installation als App |
@@ -45,7 +45,8 @@ npx esbuild entry.js --bundle --minify --format=iife --global-name=supabase --ta
 - `links` (a, b, short, long) – beide Charaktere müssen zum selben Board gehören
 - `factions` (name, color `#rrggbb`) und `character_factions` (Zuordnung, mehrere je Charakter, `position` = Reihenfolge)
 - `board_visits` (wer hat welches geteilte Board besucht → „Mit mir geteilt“)
-- Funktionen (API): `open_shared_board(board, token)`, `get_share_token`, `reset_share_link(board, remove_visitors)`, `delete_my_account` – prüfen selbst, wer angemeldet ist. Der Supabase Security Advisor meldet für diese 4 „Signed-In Users Can Execute SECURITY DEFINER Function“: **gewollt**, die App ruft sie auf.
+- Funktionen (API): `open_shared_board(board, token)`, `get_share_token`, `reset_share_link(board, remove_visitors)`, `transfer_board_owner(board, new_owner)` (seit 2.8), `delete_my_account` – prüfen selbst, wer angemeldet ist. Der Supabase Security Advisor meldet für diese **5** „Signed-In Users Can Execute SECURITY DEFINER Function“: **gewollt**, die App ruft sie auf.
+- Besitzer (`owner_id`) ist für niemanden direkt änderbar (keine Spalten-Berechtigung + Trigger `protect_columns`); nur `transfer_board_owner` setzt dafür kurz `cn.transfer` (wie `cn.rotate` beim Link erneuern)
 - Hilfsfunktionen für die Rechte-Regeln liegen im Schema **`private`** (nicht über die API erreichbar): `private.is_board_owner`, `can_read_board`, `can_see_profile`, `board_id_from_path`, `board_image_quota_ok`
 - Storage-Bucket `board-images` (privat), Pfad `<board-id>/<datei>.jpg`, Auslieferung über signierte URLs (1 h)
 - Grenzen: 200 Boards/Konto, 2000 Charaktere, 10 000 Verbindungen, 50 Fraktionen je Board, 10 Fraktionen je Charakter, 3000 Bilder je Board (`board_image_quota_ok`)
@@ -65,6 +66,7 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 ## Funktionen
 **Konto:** Registrieren, Anmelden, „Angemeldet bleiben“ (an: localStorage, aus: sessionStorage), Abmelden, Passwort ändern (mit altem Passwort), Konto löschen (mit Benutzername + Passwort, löscht Bilder, Boards, alles).
 **Startseite:** „Meine Boards“ (Teilen, Umbenennen, Exportieren, Löschen), „Mit mir geteilt“ (nur ansehen, aus Liste entfernen), Import, Banner zur Übernahme lokaler V1-Boards.
+**Ersteller übertragen (seit 2.8, nur Ersteller):** Im Teilen-Dialog unter „Mitglieder – wer hat Zugriff?“ steht oben man selbst („👑 Ersteller (du)“), darunter jeder Besucher mit Knopf „👑 Zum Ersteller machen“. Rückfrage mit Häkchen „Ich habe verstanden …“ (erst dann klickbar), „Abbrechen“ führt zurück zum Teilen-Dialog. Der neue Ersteller muss das Board schon über den Link geöffnet haben (steht in `board_visits`). Danach: neuer Ersteller kann alles (bearbeiten, teilen, Bilder, löschen) und steht nicht mehr in der Besucherliste; der bisherige Ersteller wird Besucher (Nur-Lesen, „Mit mir geteilt“) und kann es nicht selbst zurückholen. Bilder, Freigabe-Link und übrige Besucher bleiben. Der Server prüft alles (`transfer_board_owner`): Fehler `not_owner`, `invalid_new_owner`, `new_owner_no_access`, `limit_boards_new_owner` (200 Boards) → deutsche Meldungen.
 **Teilen / Einladen (nur Ersteller):** Knopf „📤 Board teilen“ in der Kopfleiste und „📤 Einladen“ auf der Board-Karte. Dialog mit „Teilen …“ (Teilen-Menü des Geräts: WhatsApp, Discord, Telegram, Mail … – `navigator.share`) und direkten Knöpfen WhatsApp, Telegram, Discord (Link kopieren + Discord öffnen, Discord hat keinen Teilen-Link), E-Mail, SMS (nur Handy), Link kopieren; Besucherliste; Link erneuern (optional alle Besucher entfernen). Besucher sehen keinen Teilen-Knopf, der Server gibt den Schlüssel nur dem Ersteller.
 **App weiterempfehlen (alle):** 📣 in der Kopfleiste (Startseite und Anmeldeseite) teilt nur den Link zur App, ohne Board.
 **Update-Hinweis:** erscheint nur, wenn auf dem Server wirklich eine andere `APP_VERSION` liegt.
@@ -76,8 +78,8 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 - *Beschriftungen ohne Überlappung:* Linienbeschriftungen, die eine wichtigere Beschriftung oder einen Kreis überdecken würden, werden ausgeblendet (Klasse `culled`); Namen ebenso (`name-off`, Wichtigere zuerst). Beim Darüberfahren, Tastatur-Fokus und in der Auswahl erscheinen sie.
 - *Hover (Maus):* Kreis + Verbundene + ihre Linien hervorgehoben, Rest abgeblasst (0,3 bzw. 0,12); die Beschriftungen der Verbindungen erscheinen (untereinander überlappungsfrei).
 - *Detailstufen* (`data-lod` am Netz): nah (Zoom ≥ 0,55) alles; mittel (≥ 0,3) keine Linienbeschriftungen, Namen nur für Rang a/b (Top 40 %); fern nur Rang a (Top 15 %, mind. 8), ohne Initialen. Namen werden beim Herauszoomen mitvergrößert (`--name-scale`, bis ×5), damit sie lesbar bleiben.
-- *Fraktionsinseln* (🏝, an/aus wird im Browser gemerkt: `localStorage cn-islands`): zarte Fläche nur um Charaktere mit **genau einer** Fraktion, verzweigt entlang des kürzesten Verbindungsbaums; Mitglieder weiter als 430 px auseinander bilden eigene Teilinseln; Fraktionsname über jeder Teilinsel.
-- *„✨ Anordnen“* (nur Ersteller, mit Rückfrage): jede Fraktion **und jede Fraktions-Kombination** wird eine gleichmäßige Gruppe (Sonnenblumen-Muster, Wichtigste in der Mitte); Gruppen werden als Kreise dicht gepackt, verwandte Gruppen (viele Verbindungen / gemeinsame Fraktionen) nebeneinander, Kombinationen zwischen ihren Fraktionen, ohne Fraktion = eigene Gruppe; danach Kräfte-Simulation ohne Überlappung (Abstand ≥ 64 px). Kein Zufall. Speichert alle Positionen (6 parallel); „↶ Rückgängig“ stellt die vorige Anordnung wieder her (nur bis zum Neuladen). Funktion `autoLayout()` in `app.js` (für Tests als `window.__cnLayout`).
+- *Fraktionsinseln* (🏝, an/aus wird im Browser gemerkt: `localStorage cn-islands`): zarte Fläche um alle Charaktere mit dieser **Hauptfraktion** (= erste Fraktion in ihrer Liste; seit 2.8 – vorher nur Charaktere mit genau einer Fraktion), jeder Charakter gehört höchstens zu einer Insel; verzweigt entlang des kürzesten Verbindungsbaums; Mitglieder weiter als 430 px auseinander bilden eigene Teilinseln; Fraktionsname über jeder Teilinsel. Im Charakter-Formular steht der Hinweis „Die erste Fraktion ist die Hauptfraktion …“.
+- *„✨ Anordnen“* (nur Ersteller, mit Rückfrage, seit 2.8 **nach Fraktionsinseln**): jede Fraktion wird genau **eine** Insel (Zuordnung nach Hauptfraktion), Sonnenblumen-Muster mit den Wichtigsten in der Mitte; Charaktere mit weiteren Fraktionen bekommen die äußeren Plätze auf der Seite, die zu diesen Fraktionen zeigt. Inseln werden als Kreise dicht gepackt, verwandte Inseln (Verbindungen, gemeinsame Mitglieder) nebeneinander; ohne Fraktion = eigene Gruppe. Danach Kräfte-Simulation ohne Überlappung (Abstand ≥ 64 px); der Zug der Verbindungen wird durch √(Verbindungszahl) geteilt, damit Viel-Verbundene auf ihrer Insel bleiben. Kein Zufall. Speichert alle Positionen (6 parallel); „↶ Rückgängig“ stellt die vorige Anordnung wieder her (nur bis zum Neuladen). Funktion `autoLayout()` in `app.js` (für Tests als `window.__cnLayout`).
 **Auswahl im Netz (seit 2.6):** Knopf „🔍 Auswahl“ (für Ersteller und Besucher) öffnet ein Fenster: Fraktionen (mehrere) und einzelne Charaktere (Liste mit Suche) auswählen, jeweils mit eigenem Schalter „Mit ihren Verbindungen“ (Fraktionen: aus, Charaktere: an), Status „Beide“ (Standard) / „Lebende“ / „Verstorbene“, „Alles zurücksetzen“. Solange das Fenster offen ist, wählt ein Klick auf einen Kreis ihn aus/ab. Abkürzungen: Fraktion in der Legende anklicken; Infokarte „🔍 Im Netz hervorheben“ (Charakter + alle Verbundenen). Darstellung: Ausgewählte mit gestricheltem Leuchtring, ihre Verbindungen dicker in Akzentfarbe, alle nicht Gezeigten nur minimal sichtbar (Deckkraft 0,08), sichtbare Verstorbene moderat (0,5). Der Knopf zeigt „🔍 Auswahl · sichtbar/gesamt“, daneben „✕ Auswahl aufheben“. Die Auswahl gilt je Board und bleibt beim Wechsel der Ansicht, nicht nach Neuladen (`focusStates` in `app.js`).
 **Wichtigkeit:** Kreisradius 32 + 4,5·√(Verbindungen), höchstens 52.
 **Weltkarte:** Kartenbild hochladen, Charaktere platzieren (auch aus „Noch nicht auf der Karte“), Pins in Fraktionsfarben.
@@ -103,7 +105,10 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 
 ## Tests
 **`bash tests/run_all.sh`** – statische Prüfungen, Datenbank (lokales Postgres, frisch + Upgrade + doppelt) und Oberfläche (Chrome headless mit nachgebautem Supabase). Am Ende muss „ALLE TESTS BESTANDEN“ stehen. Details und Live-Prüfliste: `tests/README.md`.
-Stand 22.11.2026 (Version 2.7): 22 statische + 230 Datenbank- + 140 Oberflächen-Prüfungen, alle bestanden.
+Stand 22.11.2026 (Version 2.8): 24 statische + 318 Datenbank- + 167 Oberflächen-Prüfungen (509), alle bestanden.
+
+## Testboards
+- `tests/data/silber.json` (erzeugt von `tests/data/make_silber.py`): „Silber – Die Trilogie der Träume“ (Kerstin Gier), 59 Charaktere, 11 Fraktionen, viele Mehrfach-Fraktionen – über „Importieren“ in ein Konto laden. Gedacht für „✨ Anordnen“/Inseln und als Board für „Ersteller übertragen“ (test_ersteller → test_besucher und zurück). Nebenfiguren, über die die Quellen wenig sagen, sind ausdrücklich so beschrieben.
 
 ## Arbeitsweise / Hinweise für Claude
 - Supabase ist aus der Cloud-Arbeitsumgebung von Claude **nicht erreichbar** (Proxy). Getestet wird im **Browser-Fenster der Claude-Desktop-App** auf der Live-Seite oder einer Testkopie (z. B. Unterordner `v2-test/` auf `main`, danach wieder löschen).

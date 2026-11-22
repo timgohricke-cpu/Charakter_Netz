@@ -380,3 +380,11 @@ button.legend-item[aria-pressed=true] { background: var(--panel-2); box-shadow: 
 .canvas[data-lod=far] .node:not([data-rank=a]):not(.hov):not(.picked) .node-name { opacity: 0; }
 .canvas[data-lod=far] .initials { opacity: 0; }
 .node.name-off:not(.hover-main) .node-name { opacity: 0; }
+
+/* Mitglieder im Teilen-Dialog (Ersteller übertragen, seit 2.8) */
+.link-list .member { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.link-list .member:last-child { border-bottom: 0; }
+.link-list .member-name { min-width: 0; overflow-wrap: anywhere; }
+.transfer-btn { white-space: nowrap; }
+.btn.danger-bg:disabled { opacity: .45; cursor: not-allowed; }
+.hint-main-faction { display: block; margin-top: 4px; font-size: 12px; }
