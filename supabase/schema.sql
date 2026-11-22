@@ -63,14 +63,31 @@ create table if not exists public.factions (
   unique (board_id, id)
 );
 create index if not exists factions_board_idx on public.factions (board_id);
-alter table public.characters add column if not exists faction_id uuid;
 alter table public.characters add column if not exists dead boolean not null default false;
+
+-- Zuordnung Charakter <-> Fraktionen (keine, eine oder mehrere; beide müssen zum selben Board gehören)
+create table if not exists public.character_factions (
+  board_id     uuid not null,
+  character_id uuid not null,
+  faction_id   uuid not null,
+  position     smallint not null default 0 check (position between 0 and 20),
+  primary key (character_id, faction_id),
+  foreign key (board_id, character_id) references public.characters (board_id, id) on delete cascade,
+  foreign key (board_id, faction_id) references public.factions (board_id, id) on delete cascade
+);
+create index if not exists character_factions_board_idx on public.character_factions (board_id);
+create index if not exists character_factions_faction_idx on public.character_factions (faction_id);
+
+-- Übergang von der kurzzeitigen Spalte characters.faction_id (nur eine Fraktion) zur Zuordnungstabelle
 do $$
 begin
-  if not exists (select 1 from pg_constraint where conname = 'characters_faction_fkey') then
-    -- Fraktion muss zum selben Board gehören; wird sie gelöscht, verliert der Charakter nur die Zuordnung
-    alter table public.characters add constraint characters_faction_fkey
-      foreign key (board_id, faction_id) references public.factions (board_id, id) on delete set null (faction_id);
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'characters' and column_name = 'faction_id') then
+    insert into public.character_factions (board_id, character_id, faction_id)
+      select board_id, id, faction_id from public.characters where faction_id is not null
+      on conflict do nothing;
+    alter table public.characters drop constraint if exists characters_faction_fkey;
+    alter table public.characters drop column faction_id;
   end if;
 end $$;
 
@@ -185,6 +202,10 @@ begin
     if (select count(*) from public.factions where board_id = new.board_id) >= 50 then
       raise exception 'limit_factions';
     end if;
+  elsif tg_table_name = 'character_factions' then
+    if (select count(*) from public.character_factions where character_id = new.character_id) >= 10 then
+      raise exception 'limit_char_factions';
+    end if;
   end if;
   return new;
 end;
@@ -220,7 +241,10 @@ begin
     execute format('drop trigger if exists %1$s_protect on public.%1$s', t);
     execute format('create trigger %1$s_protect before update on public.%1$s for each row execute function public.protect_columns()', t);
   end loop;
-  foreach t in array array['characters', 'links', 'factions'] loop
+  drop trigger if exists character_factions_limits on public.character_factions;
+  create trigger character_factions_limits before insert on public.character_factions
+    for each row execute function public.enforce_limits();
+  foreach t in array array['characters', 'links', 'factions', 'character_factions'] loop
     execute format('drop trigger if exists %1$s_touch_board on public.%1$s', t);
     execute format('create trigger %1$s_touch_board after insert or update or delete on public.%1$s for each row execute function public.touch_board()', t);
   end loop;
@@ -235,12 +259,13 @@ alter table public.characters   enable row level security;
 alter table public.links        enable row level security;
 alter table public.board_visits enable row level security;
 alter table public.factions     enable row level security;
+alter table public.character_factions enable row level security;
 
 -- Nicht angemeldete Besucher bekommen überhaupt keinen Zugriff auf die Tabellen
-revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions from anon;
-revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions from authenticated;
+revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions, public.character_factions from anon;
+revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions, public.character_factions from authenticated;
 grant select on public.profiles to authenticated;
-grant select, insert, update, delete on public.characters, public.links, public.factions to authenticated;
+grant select, insert, update, delete on public.characters, public.links, public.factions, public.character_factions to authenticated;
 grant select, delete on public.board_visits to authenticated;
 grant update (visited_at) on public.board_visits to authenticated;
 -- Boards nur spaltenweise: Das Freigabe-Token sieht nur der Ersteller (über get_share_token),
@@ -285,7 +310,7 @@ create policy boards_delete on public.boards for delete to authenticated
 do $$
 declare t text;
 begin
-  foreach t in array array['characters', 'links', 'factions'] loop
+  foreach t in array array['characters', 'links', 'factions', 'character_factions'] loop
     execute format('drop policy if exists %1$s_select on public.%1$s', t);
     execute format('create policy %1$s_select on public.%1$s for select to authenticated using (public.can_read_board(board_id))', t);
     execute format('drop policy if exists %1$s_insert on public.%1$s', t);
