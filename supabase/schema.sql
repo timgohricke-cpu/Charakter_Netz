@@ -265,7 +265,12 @@ alter table public.character_factions enable row level security;
 revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions, public.character_factions from anon;
 revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions, public.character_factions from authenticated;
 grant select on public.profiles to authenticated;
-grant select, insert, update, delete on public.characters, public.links, public.factions, public.character_factions to authenticated;
+grant select, insert, delete on public.characters, public.links, public.factions, public.character_factions to authenticated;
+-- Ändern nur bei Inhaltsspalten (ID, Board und Zeitstempel bleiben unverändert)
+grant update (name, short, info, place, image_path, x, y, map_x, map_y, dead) on public.characters to authenticated;
+grant update (short, long) on public.links to authenticated;
+grant update (name, color) on public.factions to authenticated;
+grant update (position) on public.character_factions to authenticated;
 grant select, delete on public.board_visits to authenticated;
 grant update (visited_at) on public.board_visits to authenticated;
 -- Boards nur spaltenweise: Das Freigabe-Token sieht nur der Ersteller (über get_share_token),
@@ -383,13 +388,42 @@ begin
 end;
 $$;
 
+-- Die Anmelde-Adresse (Pseudo-E-Mail) darf nachträglich nicht geändert werden, sonst könnte man
+-- fremde Benutzernamen blockieren oder sich selbst aussperren.
+create or replace function public.protect_auth_email() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.email is distinct from old.email and not exists (
+    select 1 from public.profiles p
+     where p.id = new.id and lower(new.email) = lower(p.username) || '@' || public.cn_email_domain()) then
+    raise exception 'email_change_not_allowed';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists cn_protect_email on auth.users;
+create trigger cn_protect_email before update of email on auth.users
+  for each row execute function public.protect_auth_email();
+
+-- Höchstzahl an Bildern je Board (schützt den Speicherplatz vor Missbrauch)
+create or replace function public.board_image_quota_ok(bid uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select bid is not null and (select count(*) from storage.objects o
+    where o.bucket_id = 'board-images' and o.name like bid::text || '/%') < 3000;
+$$;
+
 revoke all on function public.is_board_owner(uuid), public.can_read_board(uuid), public.board_id_from_path(text),
   public.open_shared_board(uuid, uuid), public.get_share_token(uuid), public.reset_share_link(uuid, boolean),
   public.delete_my_account(), public.handle_new_user(), public.touch_board(), public.enforce_limits(),
-  public.protect_columns(), public.touch_updated_at(), public.cn_email_domain() from public, anon;
+  public.protect_columns(), public.touch_updated_at(), public.cn_email_domain(), public.protect_auth_email(),
+  public.board_image_quota_ok(uuid) from public, anon;
+-- Interne Funktionen (Trigger, Hilfen) braucht niemand direkt aufzurufen
+revoke all on function public.handle_new_user(), public.touch_board(), public.enforce_limits(),
+  public.protect_columns(), public.touch_updated_at(), public.cn_email_domain(), public.protect_auth_email()
+  from authenticated;
 grant execute on function public.is_board_owner(uuid), public.can_read_board(uuid), public.board_id_from_path(text),
   public.open_shared_board(uuid, uuid), public.get_share_token(uuid), public.reset_share_link(uuid, boolean),
-  public.delete_my_account() to authenticated;
+  public.delete_my_account(), public.board_image_quota_ok(uuid) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- Bilder: privater Storage-Bucket, Pfad "<board-id>/<datei>.jpg"
@@ -404,7 +438,8 @@ create policy cn_images_select on storage.objects for select to authenticated
   using (bucket_id = 'board-images' and public.can_read_board(public.board_id_from_path(name)));
 drop policy if exists cn_images_insert on storage.objects;
 create policy cn_images_insert on storage.objects for insert to authenticated
-  with check (bucket_id = 'board-images' and public.is_board_owner(public.board_id_from_path(name)));
+  with check (bucket_id = 'board-images' and public.is_board_owner(public.board_id_from_path(name))
+              and public.board_image_quota_ok(public.board_id_from_path(name)));
 drop policy if exists cn_images_update on storage.objects;
 create policy cn_images_update on storage.objects for update to authenticated
   using (bucket_id = 'board-images' and public.is_board_owner(public.board_id_from_path(name)))

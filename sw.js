@@ -1,6 +1,6 @@
 'use strict';
 // Service Worker: macht die App offline-fähig und installierbar.
-const CACHE = 'charakter-netz-v2';
+const CACHE = 'charakter-netz-v3';
 const ASSETS = [
   './', './index.html', './app.js', './style.css', './manifest.webmanifest',
   './config.js', './vendor/supabase.js',

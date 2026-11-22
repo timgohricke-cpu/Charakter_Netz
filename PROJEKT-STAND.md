@@ -26,7 +26,7 @@ Statische PWA ohne Build-Schritt und ohne externe Bibliotheken zur Laufzeit, geh
 | `config.js` | Supabase-URL, öffentlicher *publishable key*, `EMAIL_DOMAIN` |
 | `app.js` | Gesamte App (ca. 1600 Zeilen, ein IIFE, kein Framework) |
 | `style.css` | Design inkl. Hell-/Dunkelmodus über CSS-Variablen (`:root` / `:root[data-theme=light]`) |
-| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v2`** – bei jeder Änderung an App-Dateien hochzählen |
+| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v3`** – bei jeder Änderung an App-Dateien hochzählen |
 | `vendor/supabase.js` | `@supabase/supabase-js` 2.119.2, lokal mit esbuild gebündelt (IIFE, global `supabase`) |
 | `supabase/schema.sql` | Komplettes Datenbank-Skript; **idempotent** (kann jederzeit erneut ausgeführt werden) |
 | `manifest.webmanifest`, Icons | Installation als App |
@@ -47,7 +47,9 @@ npx esbuild entry.js --bundle --minify --format=iife --global-name=supabase --ta
 - `board_visits` (wer hat welches geteilte Board besucht → „Mit mir geteilt“)
 - Funktionen: `open_shared_board(board, token)`, `get_share_token`, `reset_share_link(board, remove_visitors)`, `delete_my_account`, Hilfsfunktionen `is_board_owner`, `can_read_board`, `can_see_profile`
 - Storage-Bucket `board-images` (privat), Pfad `<board-id>/<datei>.jpg`, Auslieferung über signierte URLs (1 h)
-- Grenzen: 200 Boards/Konto, 2000 Charaktere, 10 000 Verbindungen, 50 Fraktionen je Board, 10 Fraktionen je Charakter
+- Grenzen: 200 Boards/Konto, 2000 Charaktere, 10 000 Verbindungen, 50 Fraktionen je Board, 10 Fraktionen je Charakter, 3000 Bilder je Board (`board_image_quota_ok`)
+- Ändern ist nur bei Inhaltsspalten erlaubt (spaltenweise `grant update`); ID, Board und Zeitstempel sind fest
+- Trigger `cn_protect_email` auf `auth.users`: Die Anmelde-Adresse kann nachträglich nicht geändert werden
 
 ### Anmeldung
 Benutzername + Passwort über Supabase Auth mit Pseudo-E-Mail `<name kleingeschrieben>@users.charakter-netz.app`.
@@ -67,7 +69,8 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 **Verstorben:** Rand + Name grau, „†“ hinter dem Namen, Bild schwarz-weiß.
 **Wichtigkeit:** Kreisradius 32 + 4,5·√(Verbindungen), höchstens 52.
 **Weltkarte:** Kartenbild hochladen, Charaktere platzieren (auch aus „Noch nicht auf der Karte“), Pins in Fraktionsfarben.
-**Tabelle:** Suche (auch nach Fraktion / „verstorben“), Sortierung, Fraktions-Spalte.
+**Tabelle:** Suche (auch nach Fraktion / „verstorben“), Sortierung (auch per Tastatur), Fraktions-Spalte.
+**Tastatur:** Kreise und Linienbeschriftungen im Netz sind per Tab erreichbar, Enter öffnet sie.
 **Hell-/Dunkelmodus:** ☀️/🌙 in der Kopfleiste, wird gespeichert, Start nach Systemeinstellung.
 **Import/Export:** JSON (Format-Version 2, inkl. Bilder als Data-URL, Fraktionen, Status); alte V1-Dateien werden weiter angenommen.
 **Installation:** Abfrage „Desktop-Symbol erstellen?“, Anleitung für iPhone und für den WhatsApp-Browser („Im Browser öffnen“).
@@ -76,6 +79,10 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 - Row Level Security auf allen Tabellen und im Storage, anon-Rolle ohne Tabellenrechte
 - Freigabe-Token nur für den Ersteller lesbar; Benutzernamen nur sichtbar, wenn man ein Board teilt
 - Strenge CSP, kein CDN, kein `innerHTML` mit Nutzertexten, Import wird geprüft
+- Clickjacking-Schutz: In einem fremden `<iframe>` startet die App nicht (GitHub Pages kann `frame-ancestors` nicht als Header setzen)
+- Interne Trigger-Funktionen sind für `authenticated` nicht aufrufbar
+- Signierte Bildadressen (1 h) werden bei lange offenen Boards automatisch erneuert; nach Entzug des Zugriffs bleiben bereits ausgegebene Adressen höchstens 1 h gültig
+- Supabase-Einstellung: „Minimum password length“ = 8 (Auth → Providers → Email)
 - Bilder werden neu kodiert (entfernt GPS/EXIF), privat gespeichert
 - Der *publishable key* in `config.js` ist öffentlich gedacht. **Niemals** den `service_role`/secret key oder das Datenbank-Passwort ins Repo oder in einen Chat geben.
 
@@ -86,3 +93,4 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 - PostgREST-Einbettungen zwischen `boards` und `profiles` brauchen den Fremdschlüsselnamen (`profiles!boards_owner_id_fkey`), weil es zwei Wege gibt.
 - `boards` hat spaltenweise Rechte: nie `select('*')` auf `boards` verwenden.
 - Commit-Nachrichten auf Deutsch.
+- Lokale Tests: `supabase/schema.sql` gegen Postgres 16 mit nachgebautem `auth`/`storage`-Schema (Rollen anon/authenticated, `auth.uid()` aus `request.jwt.claim.sub`); Oberfläche mit Playwright/Chrome und einem In-Memory-Nachbau des Supabase-Clients.

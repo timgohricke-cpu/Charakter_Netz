@@ -6,6 +6,20 @@
  * Alle Nutzertexte werden mit textContent eingefügt (kein innerHTML) -> Schutz vor Script-Injection.
  */
 (() => {
+  // ---------- Schutz vor Clickjacking ----------
+  // GitHub Pages kann keinen „frame-ancestors“-Header setzen: In einem fremden Rahmen startet die App deshalb nicht.
+  let framed = true;
+  try { framed = window.top !== window.self; } catch { framed = true; }
+  if (framed) {
+    const app = document.getElementById('app');
+    const p = document.createElement('p'); p.className = 'loading';
+    const a = document.createElement('a'); a.href = location.href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    a.textContent = 'Charakter-Netz in einem eigenen Fenster öffnen';
+    p.append(a);
+    if (app) app.replaceChildren(p);
+    return;
+  }
+
   // ---------- Konfiguration ----------
   const CFG = window.CN_CONFIG || {};
   const SB_URL = String(CFG.SUPABASE_URL || '').replace(/\/+$/, '');
@@ -152,7 +166,9 @@
     if (/Failed to fetch|NetworkError|Load failed|network|fetch failed/i.test(m)) return 'Keine Verbindung zum Server. Bist du online?';
     if (code === 'invalid_credentials' || /Invalid login credentials/i.test(m)) return 'Benutzername oder Passwort ist falsch.';
     if (code === 'user_already_exists' || /already (registered|exists)/i.test(m)) return 'Dieser Benutzername ist schon vergeben.';
-    if (/Database error saving new user|duplicate key|unique/i.test(m)) return 'Dieser Benutzername ist schon vergeben.';
+    if (/Database error saving new user/i.test(m)) return 'Dieser Benutzername ist schon vergeben oder ungültig.';
+    if (/email_change_not_allowed/.test(m)) return 'Der Anmeldename kann nicht geändert werden.';
+    if (code === '23505' || /duplicate key|unique constraint/i.test(m)) return 'Dieser Eintrag existiert bereits. Bitte lade die Seite neu.';
     if (code === 'email_address_invalid' || /email.*invalid|invalid.*email/i.test(m)) return 'Die Registrierung ist auf dem Server falsch eingerichtet (E-Mail-Domain). Bitte EMAIL_DOMAIN in config.js prüfen.';
     if (code === 'email_not_confirmed' || /Email not confirmed/i.test(m)) return 'Dieses Konto ist noch nicht bestätigt. In Supabase muss „Confirm email“ ausgeschaltet sein.';
     if (code === 'weak_password' || /weak|Password should/i.test(m)) return 'Das Passwort ist zu schwach. Bitte nimm mindestens 8 Zeichen, gemischt aus Buchstaben und Zahlen.';
@@ -279,6 +295,11 @@
       out.ownerName = p ? p.username : '';
     }
     return out;
+  }
+
+  // Liste von IDs aus localStorage lesen (beschädigte Einträge werden ignoriert)
+  function readIdList(key) {
+    try { const v = JSON.parse(store(key) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; } catch { return []; }
   }
 
   // ---------- Lokaler Speicher aus Version 1 (nur noch für die Übernahme) ----------
@@ -440,6 +461,14 @@
   }
 
   // ---------- Anmeldung / Registrierung ----------
+  // Gemeinsame Passwort-Regeln für Registrierung und Passwort-Änderung
+  function passwordProblem(p, name) {
+    if (p.length < 8) return 'Das Passwort muss mindestens 8 Zeichen lang sein.';
+    if (new TextEncoder().encode(p).length > 72) return 'Das Passwort ist zu lang (höchstens 72 Zeichen).';
+    if (name && p.toLowerCase().includes(name.toLowerCase())) return 'Das Passwort darf den Benutzernamen nicht enthalten.';
+    if (/^(.)\1+$/.test(p) || /^(12345678|password|passwort|qwertz|qwerty)/i.test(p)) return 'Dieses Passwort ist zu leicht zu erraten.';
+    return null;
+  }
   function showAuth(mode = 'login') {
     board = null; placing = null; closeModal();
     if (!CONFIGURED) {
@@ -472,9 +501,8 @@
       const p = pw.value;
       if (!USERNAME_RE.test(name)) { err.textContent = 'Der Benutzername muss 3–24 Zeichen lang sein und darf nur Buchstaben, Zahlen, Punkt, Unter- und Bindestrich enthalten.'; user.focus(); return; }
       if (isReg) {
-        if (p.length < 8) { err.textContent = 'Das Passwort muss mindestens 8 Zeichen lang sein.'; pw.focus(); return; }
-        if (p.toLowerCase().includes(name.toLowerCase())) { err.textContent = 'Das Passwort darf den Benutzernamen nicht enthalten.'; pw.focus(); return; }
-        if (/^(.)\1+$/.test(p) || /^(12345678|password|passwort|qwertz|qwerty)/i.test(p)) { err.textContent = 'Dieses Passwort ist zu leicht zu erraten.'; pw.focus(); return; }
+        const prob = passwordProblem(p, name);
+        if (prob) { err.textContent = prob; pw.focus(); return; }
         if (p !== pw2.value) { err.textContent = 'Die beiden Passwörter stimmen nicht überein.'; pw2.focus(); return; }
       } else if (!p) { err.textContent = 'Bitte das Passwort eingeben.'; pw.focus(); return; }
       store(REMEMBER_KEY, remember.checked ? '1' : '0');
@@ -530,7 +558,7 @@
     toast('Du wurdest abgemeldet.');
   }
   function clearSessionState() {
-    me = null; board = null; placing = null; urlCache.clear(); netT.clear(); mapT.clear();
+    me = null; board = null; placing = null; focusChar = null; tableFilter = ''; urlCache.clear(); netT.clear(); mapT.clear();
     sstore('cn-pending', null);
   }
 
@@ -540,8 +568,9 @@
     const n1 = el('input', { type: 'password', autocomplete: 'new-password', maxlength: 72 });
     const n2 = el('input', { type: 'password', autocomplete: 'new-password', maxlength: 72 });
     const chg = btn('Passwort ändern', () => {
-      if (n1.value.length < 8) { toast('Das neue Passwort muss mindestens 8 Zeichen lang sein.'); return; }
-      if (n1.value.toLowerCase().includes(me.username.toLowerCase())) { toast('Das Passwort darf den Benutzernamen nicht enthalten.'); return; }
+      if (!cur.value) { toast('Bitte das aktuelle Passwort eingeben.'); cur.focus(); return; }
+      const prob = passwordProblem(n1.value, me.username);
+      if (prob) { toast(prob); n1.focus(); return; }
       if (n1.value !== n2.value) { toast('Die neuen Passwörter stimmen nicht überein.'); return; }
       busy(chg, async () => {
         // Aktuelles Passwort prüfen, bevor es geändert wird
@@ -646,9 +675,9 @@
           }), 'ghost small'))));
     }
 
-    const migrated = new Set(JSON.parse(store(`cn-migrated-${me.id}`) || '[]'));
+    const migrated = new Set(readIdList(`cn-migrated-${me.id}`));
     const localOpen = local.filter((b) => !migrated.has(b.id));
-    const imp = el('input', { type: 'file', accept: 'application/json,.json', class: 'visually-hidden', onchange: (e) => importBoard(imp.files[0], e.target.closest('label')) });
+    const imp = el('input', { type: 'file', accept: 'application/json,.json', class: 'visually-hidden', onchange: (e) => { const f = imp.files[0]; const lbl = e.target.closest('label'); imp.value = ''; importBoard(f, lbl); } });
     $('#app').replaceChildren(
       topbarHome(),
       el('main', { class: 'home' },
@@ -817,7 +846,7 @@
     const askedKey = `cn-migrate-asked-${me.id}`;
     if (!manual && store(askedKey)) return;
     const migratedKey = `cn-migrated-${me.id}`;
-    const migrated = new Set(JSON.parse(store(migratedKey) || '[]'));
+    const migrated = new Set(readIdList(migratedKey));
     const local = (await LocalDB.all()).filter((b) => b && !migrated.has(b.id));
     if (!local.length) { if (manual) toast('Keine lokalen Boards gefunden.'); return; }
     if (currentModal && !manual) return;
@@ -1019,7 +1048,9 @@
     const rmImg = btn('Bild entfernen', () => { d.image = null; d._blob = null; d._rm = true; setPrev(); rmImg.hidden = true; }, 'ghost small danger');
     rmImg.hidden = !d.image;
     const file = el('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onchange: async () => {
-      try { const r = await readImage(file.files[0], 400); d._blob = r.blob; d._rm = false; d.image = URL.createObjectURL(r.blob); setPrev(); rmImg.hidden = false; } catch (e) { toast(e.message); }
+      const f = file.files[0]; file.value = '';
+      if (!f) return;
+      try { const r = await readImage(f, 400); d._blob = r.blob; d._rm = false; d.image = URL.createObjectURL(r.blob); setPrev(); rmImg.hidden = false; } catch (e) { toast(e.message); }
     } });
     name.addEventListener('input', () => { if (!d.image) setPrev(); });
     setPrev();
@@ -1169,7 +1200,9 @@
       this.c = c; this.applyFn = apply; this.o = o;
       this.t = { x: 0, y: 0, k: 1 }; this.min = o.min ?? 0.1; this.max = o.max ?? 6;
       this.ptr = new Map(); this.h = null; this.pinch = null;
-      c.addEventListener('wheel', (e) => { e.preventDefault(); this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))); }, { passive: false });
+      c.addEventListener('wheel', (e) => {
+        if (e.target.closest && e.target.closest('.legend, .unplaced')) return; // eigene Listen scrollen lassen
+        e.preventDefault(); this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))); }, { passive: false });
       c.addEventListener('pointerdown', (e) => this.down(e));
       c.addEventListener('pointermove', (e) => this.move(e));
       c.addEventListener('pointerup', (e) => this.up(e, false));
@@ -1254,21 +1287,34 @@
       hint.textContent = txt[netMode] || txt.move;
     }
 
+    const linkEls = new Map(); // Verbindungs-ID -> { line, lb }
     function drawLinks() {
-      gl.replaceChildren(); glb.replaceChildren();
+      gl.replaceChildren(); glb.replaceChildren(); linkEls.clear();
       for (const l of board.links) {
         const a = byId(l.a), b = byId(l.b);
         if (!a || !b) continue;
         const g = sv('g', { class: 'link' });
-        g.append(sv('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y }));
+        const line = sv('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+        g.append(line);
         const label = trunc(l.short || '…', 32);
         const w = label.length * 6.8 + 16;
-        const lb = sv('g', { class: 'link-label', transform: `translate(${(a.x + b.x) / 2},${(a.y + b.y) / 2})`, tabindex: 0 });
+        const lb = sv('g', { class: 'link-label', transform: `translate(${(a.x + b.x) / 2},${(a.y + b.y) / 2})`, tabindex: 0, role: 'button', 'aria-label': `Verbindung ${a.name} – ${b.name}: ${l.short}` });
         lb.dataset.link = l.id;
+        linkEls.set(l.id, { line, lb });
         lb.append(sv('rect', { x: -w / 2, y: -11, width: w, height: 22, rx: 11 }));
         const t = sv('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }); t.textContent = label;
         const tt = sv('title'); tt.textContent = l.short;
         lb.append(t, tt); gl.append(g); glb.append(lb);
+      }
+    }
+    // Nur die Linien eines verschobenen Charakters neu setzen (schnell auch bei vielen Verbindungen)
+    function moveLinksOf(cid) {
+      for (const l of board.links) {
+        if (l.a !== cid && l.b !== cid) continue;
+        const e = linkEls.get(l.id); const a = byId(l.a), b = byId(l.b);
+        if (!e || !a || !b) continue;
+        e.line.setAttribute('x1', a.x); e.line.setAttribute('y1', a.y); e.line.setAttribute('x2', b.x); e.line.setAttribute('y2', b.y);
+        e.lb.setAttribute('transform', `translate(${(a.x + b.x) / 2},${(a.y + b.y) / 2})`);
       }
     }
     function drawNodes() {
@@ -1277,7 +1323,7 @@
       board.characters.forEach((c, idx) => {
         const r = radiusFor(deg.get(c.id));
         const cols = colorsOf(c);
-        const g = sv('g', { class: 'node' + (first === c.id ? ' selected' : '') + (c.dead ? ' dead' : ''), transform: `translate(${c.x},${c.y})` });
+        const g = sv('g', { class: 'node' + (first === c.id ? ' selected' : '') + (c.dead ? ' dead' : ''), transform: `translate(${c.x},${c.y})`, tabindex: 0, role: 'button', 'aria-label': displayName(c) });
         g.dataset.char = c.id;
         paint(g, cols[0] || null);
         g.append(sv('circle', { class: 'node-bg', r }));
@@ -1339,7 +1385,7 @@
           if (netMode === 'move' && canEdit()) {
             const s = pz.toWorld(e.clientX, e.clientY); const ox = c.x, oy = c.y;
             return {
-              move(ev) { const p = pz.toWorld(ev.clientX, ev.clientY); c.x = Math.round(ox + p.x - s.x); c.y = Math.round(oy + p.y - s.y); n.setAttribute('transform', `translate(${c.x},${c.y})`); drawLinks(); },
+              move(ev) { const p = pz.toWorld(ev.clientX, ev.clientY); c.x = Math.round(ox + p.x - s.x); c.y = Math.round(oy + p.y - s.y); n.setAttribute('transform', `translate(${c.x},${c.y})`); moveLinksOf(c.id); },
               up(ev, moved) {
                 if (!moved) { charInfo(c.id); return; }
                 persist(async () => mustAffect(await q(sb.from('characters').update({ x: c.x, y: c.y }).eq('id', c.id).select('id')))).catch(() => {});
@@ -1377,6 +1423,14 @@
     main.append(el('div', { class: 'toolbar' }, canEdit() ? modeBtns : null, canEdit() ? btn('🎨 Fraktionen', factionDialog, 'small') : null,
       el('div', { class: 'spacer' }), zoomButtons(pz, fit)), wrap, hint);
     const lg = legend(); if (lg) { lg.addEventListener('pointerdown', (e) => e.stopPropagation()); wrap.append(lg); }
+    // Tastatur: Enter / Leertaste auf Kreis oder Linienbeschriftung
+    svg.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const n = e.target.closest && e.target.closest('.node');
+      const lb = e.target.closest && e.target.closest('.link-label');
+      if (n) { e.preventDefault(); const c = byId(n.dataset.char); if (c) nodeTap(c); }
+      else if (lb) { e.preventDefault(); linkInfo(lb.dataset.link); }
+    });
     wrap.className = 'canvas grid mode-' + netMode;
     drawLinks(); drawNodes(); updHint();
     const saved = netT.get(board.id);
@@ -1388,10 +1442,12 @@
     const wrap = el('div', { class: 'canvas' });
     const fileIn = el('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onchange: async () => {
       const label = fileIn.closest('label');
+      const f = fileIn.files[0]; fileIn.value = '';
+      if (!f) return;
       if (label) label.classList.add('busy');
       try {
         toast('Karte wird hochgeladen …');
-        const r = await readImage(fileIn.files[0], 4096, 0.9);
+        const r = await readImage(f, 4096, 0.9);
         const oldPath = board.map && board.map.path;
         const path = await uploadImage(board.id, r.blob, 'map-');
         try { mustAffect(await q(sb.from('boards').update({ map_path: path, map_w: r.w, map_h: r.h }).eq('id', board.id).select('id'))); } catch (e) { removeImages([path]); throw e; }
@@ -1520,16 +1576,51 @@
       if (!rows.length) tbody.append(el('tr', {}, el('td', { colspan: 7, class: 'muted', text: board.characters.length ? 'Keine Treffer.' : (canEdit() ? 'Noch keine Charaktere. Füge über „+ Charakter“ einen hinzu.' : 'Dieses Board hat noch keine Charaktere.') })));
     }
     search.addEventListener('input', () => { tableFilter = search.value; fill(); });
-    const thead = el('thead', {}, el('tr', {}, cols.map(([k, label, cls]) => el('th', { class: cls, onclick: k === 'bild' ? null : () => {
-      tableSort = tableSort.key === k ? { key: k, dir: -tableSort.dir } : { key: k, dir: 1 };
-      renderBoard();
-    } }, label, tableSort.key === k && label ? (tableSort.dir > 0 ? ' ▲' : ' ▼') : ''))));
+    const sortBy = (k) => { tableSort = tableSort.key === k ? { key: k, dir: -tableSort.dir } : { key: k, dir: 1 }; renderBoard(); };
+    const thead = el('thead', {}, el('tr', {}, cols.map(([k, label, cls]) => el('th', {
+      class: cls, scope: 'col', tabindex: k === 'bild' ? null : 0,
+      'aria-sort': tableSort.key === k && label ? (tableSort.dir > 0 ? 'ascending' : 'descending') : null,
+      onclick: k === 'bild' ? null : () => sortBy(k),
+      onkeydown: k === 'bild' ? null : (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sortBy(k); } },
+    }, label, tableSort.key === k && label ? (tableSort.dir > 0 ? ' ▲' : ' ▼') : ''))));
     main.append(
       el('div', { class: 'toolbar' }, search, el('div', { class: 'spacer' }),
         canEdit() ? btn('+ Charakter', () => charForm(newChar(Math.round(Math.random() * 400 - 200), Math.round(Math.random() * 300 - 150)), true), 'primary small') : null),
       el('div', { class: 'table-wrap' }, el('table', {}, thead, tbody)));
     fill();
   }
+
+  // ---------- Bildadressen auffrischen ----------
+  // Signierte Bildadressen gelten 1 Stunde. Bleibt ein Board länger offen, werden sie rechtzeitig erneuert,
+  // damit Bilder und Karte nicht plötzlich verschwinden.
+  let pointerBusy = false;
+  document.addEventListener('pointerdown', () => { pointerBusy = true; }, true);
+  document.addEventListener('pointerup', () => { pointerBusy = false; }, true);
+  document.addEventListener('pointercancel', () => { pointerBusy = false; }, true);
+  let refreshing = false;
+  async function refreshImages() {
+    if (!board || !me || refreshing || document.visibilityState === 'hidden') return;
+    const own = (u) => typeof u === 'string' && u.startsWith('blob:'); // gerade selbst hochgeladen
+    const paths = [board.map && !own(board.map.src) ? board.map.path : null,
+      ...board.characters.filter((c) => !own(c.image)).map((c) => c.imagePath)].filter(Boolean);
+    const soon = Date.now() + 10 * 60000;
+    if (!paths.some((p) => !((urlCache.get(p) || {}).exp > soon))) return;
+    // Nicht mitten in einer Bedienung neu zeichnen
+    const ae = document.activeElement;
+    if (currentModal || pointerBusy || placing || (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName))) return;
+    refreshing = true;
+    const id = board.id;
+    try {
+      for (const p of paths) urlCache.delete(p);
+      const get = await signUrls(paths);
+      if (!board || board.id !== id) return;
+      if (board.map && !own(board.map.src)) board.map.src = get(board.map.path);
+      for (const c of board.characters) if (!own(c.image)) c.image = get(c.imagePath);
+      if (!currentModal && !pointerBusy) renderBoard();
+    } catch { /* nächster Versuch beim nächsten Intervall */ } finally { refreshing = false; }
+  }
+  setInterval(refreshImages, 2 * 60000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshImages(); });
 
   // ---------- Installation als App (Desktop-Symbol) ----------
   let installEvt = null;
