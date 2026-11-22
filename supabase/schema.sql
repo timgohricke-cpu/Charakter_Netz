@@ -32,6 +32,11 @@ create table if not exists public.boards (
   updated_at  timestamptz not null default now()
 );
 create index if not exists boards_owner_idx on public.boards (owner_id);
+-- Titelbild des Boards (seit 2.10): Datei im eigenen Bild-Ordner des Boards, "<board-id>/cover-<uuid>.jpg"
+alter table public.boards add column if not exists cover_path text;
+alter table public.boards drop constraint if exists boards_cover_path_check;
+alter table public.boards add constraint boards_cover_path_check check (
+  cover_path is null or cover_path ~ ('^' || id::text || '/cover-[0-9a-f-]{36}\.jpg$'));
 create unique index if not exists boards_share_token_idx on public.boards (share_token);
 
 create table if not exists public.characters (
@@ -303,9 +308,9 @@ grant select, delete on public.board_visits to authenticated;
 grant update (visited_at) on public.board_visits to authenticated;
 -- Boards nur spaltenweise: Das Freigabe-Token sieht nur der Ersteller (über get_share_token),
 -- Besitzer, ID und Zeitstempel kann niemand selbst setzen.
-grant select (id, owner_id, name, map_path, map_w, map_h, created_at, updated_at) on public.boards to authenticated;
+grant select (id, owner_id, name, map_path, map_w, map_h, cover_path, created_at, updated_at) on public.boards to authenticated;
 grant insert (name, map_path, map_w, map_h) on public.boards to authenticated;
-grant update (name, map_path, map_w, map_h) on public.boards to authenticated;
+grant update (name, map_path, map_w, map_h, cover_path) on public.boards to authenticated;
 grant delete on public.boards to authenticated;
 
 -- Profile: Man sieht nur sich selbst, die Ersteller der Boards, die man ansehen darf,
