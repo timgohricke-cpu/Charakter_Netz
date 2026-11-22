@@ -26,8 +26,12 @@
   const SB_KEY = String(CFG.SUPABASE_KEY || '');
   const EMAIL_DOMAIN = String(CFG.EMAIL_DOMAIN || 'users.charakter-netz.app');
   const BUCKET = 'board-images';
+  const APP_VERSION = '2.4'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
   const CONFIGURED = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(SB_URL) && SB_KEY.length > 20 && !!window.supabase;
-  const USERNAME_RE = /^[A-Za-z0-9_.-]{3,24}$/;
+  // Benutzernamen: 2–24 Zeichen, Buchstaben/Ziffern . _ - sowie Japanisch (Hiragana, Katakana, Kanji).
+  // Muss zu private.cn_username_ok() in supabase/schema.sql passen.
+  const USERNAME_RE = /^[A-Za-z0-9_.\-\u3005-\u3007\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FC-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]{2,24}$/;
+  const normUser = (s) => String(s || '').trim().normalize('NFKC');
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const BOARD_COLS = 'id,owner_id,name,map_path,map_w,map_h,created_at,updated_at';
   const CHAR_COLS = 'id,name,short,info,place,image_path,x,y,map_x,map_y,dead';
@@ -52,7 +56,22 @@
     const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
   };
-  const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+  // Japanische (breite) Zeichen zählen doppelt, damit Beschriftungen nicht überlaufen
+  const isWide = (ch) => /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]|[\u{20000}-\u{3FFFD}]/u.test(ch);
+  const textUnits = (s) => { let n = 0; for (const ch of String(s)) n += isWide(ch) ? 2 : 1; return n; };
+  // Kürzen nach Breite, ohne Schriftzeichen zu zerschneiden
+  const trunc = (s, n) => {
+    s = String(s); if (textUnits(s) <= n) return s;
+    let out = '', u = 0;
+    for (const ch of s) { const w = isWide(ch) ? 2 : 1; if (u + w > n - 1) break; out += ch; u += w; }
+    return out + '…';
+  };
+  // Suche: Groß/klein, Voll-/Halbbreite und Hiragana/Katakana spielen keine Rolle
+  const fold = (s) => String(s || '').normalize('NFKC').toLowerCase().replace(/[\u30A1-\u30F6]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+  const collator = new Intl.Collator(['de', 'ja'], { numeric: true, sensitivity: 'base' });
+  const byName = (x, y) => collator.compare(x.name, y.name);
+  // Bei japanischer Eingabe (IME) bestätigt Enter nur die Umwandlung – dann nichts auslösen
+  const imeEnter = (e) => e.isComposing || e.keyCode === 229;
   const initials = (n) => (n || '').split(/\s+/).map((w) => (w.match(/[\p{L}\p{N}]/u) || [''])[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || '?';
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
@@ -96,6 +115,25 @@
     try { if (val === undefined) return sessionStorage.getItem(key); if (val === null) sessionStorage.removeItem(key); else sessionStorage.setItem(key, val); } catch { return null; }
     return null;
   }
+  // ---------- Offene Einladung ----------
+  // Ein Freigabe-Link wird gemerkt, bis man angemeldet ist – auch über die Installation der App hinweg
+  // (localStorage teilen sich Browser und installierte App). Gültig 2 Tage, danach verworfen.
+  const INVITE_KEY = 'cn-invite';
+  const INVITE_RE = /^#\/(s|b)\/[0-9a-f-]{36}(\/[0-9a-z-]{1,36})?$/i;
+  function setPending(hash) {
+    if (!INVITE_RE.test(hash || '')) return;
+    store(INVITE_KEY, JSON.stringify({ hash, exp: Date.now() + 2 * 86400000 }));
+  }
+  function getPending() {
+    try {
+      const v = JSON.parse(store(INVITE_KEY) || 'null');
+      if (v && typeof v.hash === 'string' && INVITE_RE.test(v.hash) && v.exp > Date.now()) return v.hash;
+    } catch { /* beschädigt */ }
+    store(INVITE_KEY, null);
+    return null;
+  }
+  const clearPending = () => { store(INVITE_KEY, null); sstore('cn-pending', null); };
+
   // ---------- Hell / Dunkel ----------
   const THEME_KEY = 'cn-theme';
   const currentTheme = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
@@ -204,7 +242,15 @@
     auth: { storage: authStorage, storageKey: 'cn-auth', persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
   }) : null;
   async function q(p) { const { data, error } = await p; if (error) throw error; return data; }
-  const emailFor = (username) => `${username.toLowerCase()}@${EMAIL_DOMAIN}`;
+  // Anmelde-Adresse zu einem Benutzernamen (muss zu private.cn_email_for() in schema.sql passen):
+  // reine ASCII-Namen wie bisher <name klein>@domain, sonst u+<40 Hex-Zeichen SHA-256>@domain
+  async function emailFor(username) {
+    const u = normUser(username);
+    if (/^[A-Za-z0-9_.-]+$/.test(u)) return `${u.toLowerCase()}@${EMAIL_DOMAIN}`;
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(u.toLowerCase()));
+    const hex = [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    return `u+${hex.slice(0, 40)}@${EMAIL_DOMAIN}`;
+  }
 
   // Signierte (zeitlich begrenzte) Bildadressen aus dem privaten Bucket
   const urlCache = new Map();
@@ -280,7 +326,7 @@
       map: b.map_path ? { path: b.map_path, w: b.map_w || 1000, h: b.map_h || 500, src: null } : null,
       characters: chars.map(charFromRow),
       links: links.map((l) => ({ id: l.id, a: l.a, b: l.b, short: l.short, long: l.long })),
-      factions: factions.filter((f) => COLOR_RE.test(f.color)).sort((x, y) => x.name.localeCompare(y.name, 'de')),
+      factions: factions.filter((f) => COLOR_RE.test(f.color)).sort(byName),
     };
     const cmap = new Map(out.characters.map((c) => [c.id, c]));
     cf.sort((x, y) => x.position - y.position);
@@ -330,6 +376,7 @@
   let tableSort = { key: 'name', dir: 1 };
   let tableFilter = '';
   let routeSeq = 0;
+  let joinedNotice = false;
   const netT = new Map();
   const mapT = new Map();
 
@@ -387,7 +434,7 @@
     const seq = ++routeSeq;
     const parts = location.hash.replace(/^#\/?/, '').split('/');
     if (!me) {
-      if ((parts[0] === 's' || parts[0] === 'b') && parts[1]) sstore('cn-pending', location.hash);
+      if ((parts[0] === 's' || parts[0] === 'b') && parts[1]) setPending(location.hash);
       showAuth();
       return;
     }
@@ -401,6 +448,7 @@
         if (seq !== routeSeq) return;
         if (!b) { toast('Board nicht gefunden oder du hast keinen Zugriff darauf.'); go(null); return; }
         board = b;
+        if (joinedNotice) { joinedNotice = false; if (!canEdit()) toast(`„${b.name}“ wurde zu „Mit mir geteilt“ hinzugefügt.`); }
         if (!canEdit()) sb.from('board_visits').update({ visited_at: new Date().toISOString() }).eq('user_id', me.id).eq('board_id', id).then(() => {}, () => {});
       }
       view = VIEWS.includes(parts[2]) ? parts[2] : 'netz';
@@ -417,7 +465,7 @@
       const id = await q(sb.rpc('open_shared_board', { p_board: bid, p_token: token }));
       if (seq !== routeSeq) return;
       if (!id) { toast('Dieser Link ist ungültig oder wurde vom Ersteller zurückgesetzt.'); go(null); return; }
-      board = null;
+      board = null; joinedNotice = true;
       location.replace(`#/b/${id}/netz`); // Link mit Schlüssel nicht im Verlauf behalten
     } catch (e) { toast(errMsg(e)); go(null); }
   }
@@ -456,7 +504,7 @@
       if (!v) { toast('Bitte einen Namen eingeben.'); return; }
       busy(okBtn, async () => { await onOk(v); closeModal(); }).catch((e) => toast(errMsg(e)));
     };
-    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !imeEnter(e)) ok(); });
     modal(title, el('div', { class: 'form' }, field(label, inp)), [btn('Abbrechen', closeModal, 'ghost'), okBtn]);
   }
 
@@ -465,11 +513,11 @@
   function passwordProblem(p, name) {
     if (p.length < 8) return 'Das Passwort muss mindestens 8 Zeichen lang sein.';
     if (new TextEncoder().encode(p).length > 72) return 'Das Passwort ist zu lang (höchstens 72 Zeichen).';
-    if (name && p.toLowerCase().includes(name.toLowerCase())) return 'Das Passwort darf den Benutzernamen nicht enthalten.';
+    if (name && fold(p).includes(fold(name))) return 'Das Passwort darf den Benutzernamen nicht enthalten.';
     if (/^(.)\1+$/.test(p) || /^(12345678|password|passwort|qwertz|qwerty)/i.test(p)) return 'Dieses Passwort ist zu leicht zu erraten.';
     return null;
   }
-  function showAuth(mode = 'login') {
+  function showAuth(mode = 'auto') {
     board = null; placing = null; closeModal();
     if (!CONFIGURED) {
       $('#app').replaceChildren(el('main', { class: 'auth' }, el('div', { class: 'auth-card' },
@@ -477,7 +525,10 @@
         el('p', { text: 'Die App ist noch nicht mit dem Server verbunden. Trage in config.js die Supabase-URL und den anon key ein.' }))));
       return;
     }
-    const pending = sstore('cn-pending');
+    const pending = getPending();
+    const invite = !!pending && pending.startsWith('#/s/');
+    if (invite && mode === 'auto') mode = 'register'; // Einladung: meist ist man neu
+    if (mode === 'auto') mode = 'login';
     const isReg = mode === 'register';
     const user = el('input', { type: 'text', name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', maxlength: 24, required: true, placeholder: 'z. B. tim_schreibt' });
     const pw = el('input', { type: 'password', name: 'password', autocomplete: isReg ? 'new-password' : 'current-password', maxlength: 72, required: true, minlength: isReg ? 8 : null });
@@ -487,7 +538,7 @@
     const submit = el('button', { class: 'btn primary wide', type: 'submit' }, isReg ? 'Konto erstellen' : 'Anmelden');
     const form = el('form', { class: 'form', novalidate: true },
       field('Benutzername', user),
-      isReg ? el('small', { class: 'muted', text: '3–24 Zeichen: Buchstaben, Zahlen, Punkt, Unter- und Bindestrich. Groß-/Kleinschreibung spielt keine Rolle.' }) : null,
+      isReg ? el('small', { class: 'muted', text: '2–24 Zeichen: Buchstaben, Zahlen, japanische Schrift (Hiragana, Katakana, Kanji), Punkt, Unter- und Bindestrich. Groß-/Kleinschreibung spielt keine Rolle.' }) : null,
       field('Passwort', pw),
       isReg ? field('Passwort wiederholen', pw2) : null,
       isReg ? el('small', { class: 'muted', text: 'Mindestens 8 Zeichen. Es gibt keine E-Mail-Wiederherstellung – merke dir dein Passwort gut.' }) : null,
@@ -497,9 +548,9 @@
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       err.textContent = '';
-      const name = user.value.trim();
+      const name = normUser(user.value);
       const p = pw.value;
-      if (!USERNAME_RE.test(name)) { err.textContent = 'Der Benutzername muss 3–24 Zeichen lang sein und darf nur Buchstaben, Zahlen, Punkt, Unter- und Bindestrich enthalten.'; user.focus(); return; }
+      if (!USERNAME_RE.test(name)) { err.textContent = 'Der Benutzername muss 2–24 Zeichen lang sein und darf nur Buchstaben, Zahlen, japanische Schriftzeichen (Hiragana, Katakana, Kanji), Punkt, Unter- und Bindestrich enthalten.'; user.focus(); return; }
       if (isReg) {
         const prob = passwordProblem(p, name);
         if (prob) { err.textContent = prob; pw.focus(); return; }
@@ -509,11 +560,11 @@
       busy(submit, async () => {
         try {
           if (isReg) {
-            const { data, error } = await sb.auth.signUp({ email: emailFor(name), password: p, options: { data: { username: name } } });
+            const { data, error } = await sb.auth.signUp({ email: await emailFor(name), password: p, options: { data: { username: name } } });
             if (error) throw error;
             if (!data.session) throw new UErr('Das Konto wurde angelegt, aber die E-Mail-Bestätigung ist in Supabase noch aktiv. Bitte „Confirm email“ ausschalten.');
           } else {
-            const { error } = await sb.auth.signInWithPassword({ email: emailFor(name), password: p });
+            const { error } = await sb.auth.signInWithPassword({ email: await emailFor(name), password: p });
             if (error) throw error;
           }
           await afterLogin(isReg);
@@ -525,12 +576,39 @@
         el('div', { class: 'brand' }, el('img', { src: 'icon.svg', alt: '', class: 'logo' }), el('span', { text: 'Charakter-Netz' })),
         el('div', { class: 'spacer' }), themeButton(), installButton()),
       el('main', { class: 'auth' }, el('div', { class: 'auth-card' },
-        pending ? el('div', { class: 'banner invite' }, el('span', { text: 'Dir wurde ein Board geteilt. Melde dich an oder erstelle kostenlos ein Konto, um es anzusehen.' })) : null,
+        invite ? inviteBox(isReg) : (pending ? el('div', { class: 'banner invite' }, el('span', { text: 'Bitte melde dich an, um das Board zu öffnen.' })) : null),
         el('div', { class: 'tabs', role: 'tablist' },
           el('button', { class: 'tab' + (isReg ? '' : ' active'), type: 'button', role: 'tab', 'aria-selected': String(!isReg), onclick: () => showAuth('login') }, 'Anmelden'),
           el('button', { class: 'tab' + (isReg ? ' active' : ''), type: 'button', role: 'tab', 'aria-selected': String(isReg), onclick: () => showAuth('register') }, 'Registrieren')),
         form)));
-    user.focus();
+    // Bei Einladungen nicht sofort die Handy-Tastatur öffnen, damit die Schritte sichtbar bleiben
+    if (!invite || matchMedia('(pointer: fine)').matches) user.focus();
+  }
+  // Schritte für Eingeladene: App installieren (falls möglich) -> Konto -> Board wird angehängt
+  let installedNow = false;
+  let onInstallChange = null;
+  function inviteBox(isReg) {
+    const box = el('div', { class: 'banner invite invite-box' });
+    const draw = () => {
+      const steps = [];
+      if (!isStandalone()) {
+        let body;
+        if (installedNow) body = [el('p', { text: '✓ Installiert! Öffne Charakter-Netz jetzt über das neue Symbol – deine Einladung wartet dort. Du kannst auch hier im Browser weitermachen.' })];
+        else if (inAppBrowser) body = [el('p', { text: 'Du bist im Browser einer App (z. B. WhatsApp). Öffne den Link über „⋮“ bzw. das Teilen-Symbol mit „Im Browser öffnen“ – nur dort lässt sich die App installieren.' })];
+        else if (isIOS) body = [el('p', { text: 'iPhone/iPad: Erstelle zuerst hier dein Konto (nächster Schritt) – das Board wird sofort deinem Konto angehängt. Danach in Safari auf Teilen (□↑) → „Zum Home-Bildschirm“ und in der App anmelden.' })];
+        else if (installEvt) body = [el('p', { text: 'Mit eigenem Symbol auf dem Startbildschirm bzw. Desktop. Danach geht es direkt in der App weiter.' }), btn('App installieren', doInstall, 'primary small')];
+        else body = [el('p', { text: 'Optional: Charakter-Netz mit eigenem Symbol starten.' }), btn('So installierst du die App', showInstallHelp, 'small')];
+        steps.push(el('li', {}, el('strong', { text: 'App installieren (empfohlen)' }), ...body));
+      }
+      steps.push(el('li', {}, el('strong', { text: isReg ? 'Konto erstellen' : 'Anmelden' }),
+        el('p', { text: isReg ? 'Neu hier? Wähle unten Benutzername und Passwort. Schon ein Konto? Dann auf „Anmelden“ tippen.' : 'Mit deinem bestehenden Konto. Neu hier? Dann auf „Registrieren“ tippen.' })));
+      steps.push(el('li', {}, el('strong', { text: 'Board ansehen' }),
+        el('p', { text: 'Das Board wird automatisch zu „Mit mir geteilt“ hinzugefügt und geöffnet.' })));
+      box.replaceChildren(el('p', { class: 'invite-title', text: '📨 Dir wurde ein Board geteilt' }), el('ol', { class: 'steps' }, steps));
+    };
+    draw();
+    onInstallChange = () => { if (!box.isConnected) { onInstallChange = null; return false; } draw(); return true; };
+    return box;
   }
   async function loadMe() {
     const { data } = await sb.auth.getSession();
@@ -544,8 +622,8 @@
     await loadMe();
     if (!me) throw new UErr('Das Profil konnte nicht geladen werden. Bitte versuche es erneut.');
     toast(isNew ? `Willkommen, ${me.username}!` : `Angemeldet als ${me.username}.`);
-    const pending = sstore('cn-pending');
-    sstore('cn-pending', null);
+    const pending = getPending();
+    clearPending();
     if (pending && pending !== location.hash) location.hash = pending; else await route();
     setTimeout(() => offerMigration(false), 400);
   }
@@ -559,7 +637,7 @@
   }
   function clearSessionState() {
     me = null; board = null; placing = null; focusChar = null; tableFilter = ''; urlCache.clear(); netT.clear(); mapT.clear();
-    sstore('cn-pending', null);
+    clearPending();
   }
 
   // ---------- Konto ----------
@@ -574,7 +652,7 @@
       if (n1.value !== n2.value) { toast('Die neuen Passwörter stimmen nicht überein.'); return; }
       busy(chg, async () => {
         // Aktuelles Passwort prüfen, bevor es geändert wird
-        const { error: e1 } = await sb.auth.signInWithPassword({ email: emailFor(me.username), password: cur.value });
+        const { error: e1 } = await sb.auth.signInWithPassword({ email: await emailFor(me.username), password: cur.value });
         if (e1) throw e1;
         const { error: e2 } = await sb.auth.updateUser({ password: n1.value });
         if (e2) throw e2;
@@ -583,7 +661,7 @@
       }).catch((e) => toast(errMsg(e)));
     }, 'small');
     modal('Mein Konto', el('div', { class: 'form' },
-      el('p', {}, 'Angemeldet als ', el('strong', { text: me.username })),
+      el('p', {}, 'Angemeldet als ', el('strong', { text: me.username }), el('span', { class: 'muted', text: ` · Version ${APP_VERSION}` })),
       el('fieldset', {}, el('legend', { text: 'Passwort ändern' }),
         field('Aktuelles Passwort', cur), field('Neues Passwort (mind. 8 Zeichen)', n1), field('Neues Passwort wiederholen', n2), chg),
       el('fieldset', {}, el('legend', { text: 'Konto löschen' }),
@@ -595,8 +673,8 @@
     const name = el('input', { type: 'text', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' });
     const pw = el('input', { type: 'password', autocomplete: 'current-password' });
     const go2 = btn('Endgültig löschen', () => busy(go2, async () => {
-      if (name.value.trim().toLowerCase() !== me.username.toLowerCase()) throw new UErr('Bitte gib zur Bestätigung deinen Benutzernamen ein.');
-      const { error } = await sb.auth.signInWithPassword({ email: emailFor(me.username), password: pw.value });
+      if (fold(normUser(name.value)) !== fold(me.username)) throw new UErr('Bitte gib zur Bestätigung deinen Benutzernamen ein.');
+      const { error } = await sb.auth.signInWithPassword({ email: await emailFor(me.username), password: pw.value });
       if (error) throw error;
       const mine = await q(sb.from('boards').select('id').eq('owner_id', me.id));
       for (const b of mine) await removeImages(await listBoardFiles(b.id));
@@ -761,7 +839,7 @@
     for (const c of b.characters) characters.push({ id: c.id, name: c.name, short: c.short, info: c.info, image: await dl(c.imagePath), place: c.place, x: c.x, y: c.y, mapPos: c.mapPos, factions: c.factionIds, dead: c.dead });
     const out = { format: 'charakter-netz', version: 2, id: b.id, name: b.name, created: Date.parse(b.created), updated: Date.parse(b.updated), map: map && map.src ? map : null, factions: b.factions, characters, links: b.links };
     const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
-    const a = el('a', { href: URL.createObjectURL(blob), download: (b.name.replace(/[^\w\-äöüÄÖÜß ]+/g, '').trim() || 'board') + '.json' });
+    const a = el('a', { href: URL.createObjectURL(blob), download: (b.name.replace(/[^\p{L}\p{N}\-_ ]+/gu, '').trim() || 'board') + '.json' });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
@@ -943,15 +1021,15 @@
     const add = btn('+ Hinzufügen', () => {
       const v = newName.value.trim();
       if (!v) { toast('Bitte einen Namen für die Fraktion eingeben.'); newName.focus(); return; }
-      if (board.factions.some((f) => f.name.toLowerCase() === v.toLowerCase())) { toast('Diese Fraktion gibt es schon.'); return; }
+      if (board.factions.some((f) => fold(f.name) === fold(v))) { toast('Diese Fraktion gibt es schon.'); return; }
       busy(add, async () => {
         const f = { id: uid(), name: v, color: COLOR_RE.test(newColor.value) ? newColor.value.toLowerCase() : FACTION_PALETTE[0] };
         try { await q(sb.from('factions').insert({ ...f, board_id: board.id })); } catch (e) { toast(errMsg(e)); return; }
-        board.factions.push(f); board.factions.sort((x, y) => x.name.localeCompare(y.name, 'de'));
+        board.factions.push(f); board.factions.sort(byName);
         changed = true; newName.value = ''; newColor.value = FACTION_PALETTE[board.factions.length % FACTION_PALETTE.length]; draw(); newName.focus();
       });
     }, 'primary small');
-    newName.addEventListener('keydown', (e) => { if (e.key === 'Enter') add.click(); });
+    newName.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !imeEnter(e)) add.click(); });
     draw();
     const box = modal('Fraktionen', el('div', { class: 'form' },
       el('p', { class: 'muted', text: 'Die Farbe einer Fraktion wird zur Randfarbe des Kreises und zur Farbe des Namens. Verstorbene Charaktere werden immer grau dargestellt.' }),
@@ -990,10 +1068,10 @@
       input.value = ''; changed(); suggest(); input.focus();
     }
     function suggest() {
-      const v = input.value.trim(); const lv = v.toLowerCase();
-      items = pool().filter((f) => !sel.includes(f) && (!lv || f.name.toLowerCase().includes(lv)))
-        .sort((x, y) => (x.name.toLowerCase().startsWith(lv) ? 0 : 1) - (y.name.toLowerCase().startsWith(lv) ? 0 : 1) || x.name.localeCompare(y.name, 'de')).slice(0, 8);
-      const exact = pool().find((f) => f.name.toLowerCase() === lv);
+      const v = input.value.trim(); const lv = fold(v);
+      items = pool().filter((f) => !sel.includes(f) && (!lv || fold(f.name).includes(lv)))
+        .sort((x, y) => (fold(x.name).startsWith(lv) ? 0 : 1) - (fold(y.name).startsWith(lv) ? 0 : 1) || byName(x, y)).slice(0, 8);
+      const exact = pool().find((f) => fold(f.name) === lv);
       if (v && !exact) items.push({ create: v });
       if (exact && !sel.includes(exact) && !items.includes(exact)) items.unshift(exact);
       active = 0;
@@ -1014,6 +1092,7 @@
     input.addEventListener('input', suggest);
     input.addEventListener('blur', () => setTimeout(hide, 120));
     input.addEventListener('keydown', (e) => {
+      if (imeEnter(e)) return; // Umwandlung der japanischen Eingabe läuft noch
       if (e.key === 'ArrowDown' && items.length) { e.preventDefault(); active = (active + 1) % items.length; mark(); }
       else if (e.key === 'ArrowUp' && items.length) { e.preventDefault(); active = (active - 1 + items.length) % items.length; mark(); }
       else if (e.key === 'Enter' || e.key === ',') { if (items[active]) { e.preventDefault(); pick(items[active]); } }
@@ -1090,7 +1169,7 @@
           if (fresh.length) {
             await q(sb.from('factions').insert(fresh.map((f) => ({ id: f.id, board_id: board.id, name: f.name, color: f.color }))));
             for (const f of fresh) { delete f.isNew; if (!byFaction(f.id)) board.factions.push(f); }
-            board.factions.sort((x, y) => x.name.localeCompare(y.name, 'de'));
+            board.factions.sort(byName);
           }
           if (d._blob) { uploaded = await uploadImage(board.id, d._blob, 'p-'); path = uploaded; } else if (d._rm) path = null;
           const rec = { id: d.id, name: d.name, short: d.short, info: d.info, place: d.place, imagePath: path, image: path ? d.image : null, x: d.x, y: d.y, mapPos: d.mapPos, factionIds: chosen.map((f) => f.id), dead: !!d.dead };
@@ -1279,11 +1358,12 @@
       drawNodes(); updHint();
     }
     function updHint() {
+      const touch = matchMedia('(pointer: coarse)').matches;
       const txt = canEdit() ? {
-        move: board.characters.length ? 'Kreise ziehen zum Verschieben · Klick auf Kreis oder Linie: Infos · Hintergrund ziehen: Ansicht bewegen · Mausrad / zwei Finger: Zoom' : 'Wähle „＋ Charakter“ und klicke auf eine freie Stelle, um deinen ersten Charakter zu erstellen.',
+        move: board.characters.length ? (touch ? 'Kreise ziehen zum Verschieben · Tippen: Infos · Hintergrund ziehen: Ansicht bewegen · zwei Finger: Zoom' : 'Kreise ziehen zum Verschieben · Klick auf Kreis oder Linie: Infos · Hintergrund ziehen: Ansicht bewegen · Mausrad: Zoom') : 'Wähle „＋ Charakter“ und klicke auf eine freie Stelle, um deinen ersten Charakter zu erstellen.',
         add: 'Klicke auf eine freie Stelle, um dort einen Charakter zu erstellen.',
         link: first ? 'Jetzt den zweiten Charakter anklicken (Klick ins Leere bricht ab).' : 'Klicke auf den ersten Charakter, dann auf den zweiten.',
-      } : { move: board.characters.length ? 'Nur ansehen · Klick auf Kreis oder Linie: Infos · Hintergrund ziehen: Ansicht bewegen · Mausrad / zwei Finger: Zoom' : 'Dieses Board hat noch keine Charaktere.' };
+      } : { move: board.characters.length ? (touch ? 'Nur ansehen · Tippen: Infos · Hintergrund ziehen: Ansicht bewegen · zwei Finger: Zoom' : 'Nur ansehen · Klick auf Kreis oder Linie: Infos · Hintergrund ziehen: Ansicht bewegen · Mausrad: Zoom') : 'Dieses Board hat noch keine Charaktere.' };
       hint.textContent = txt[netMode] || txt.move;
     }
 
@@ -1297,7 +1377,7 @@
         const line = sv('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y });
         g.append(line);
         const label = trunc(l.short || '…', 32);
-        const w = label.length * 6.8 + 16;
+        const w = textUnits(label) * 6.8 + 16;
         const lb = sv('g', { class: 'link-label', transform: `translate(${(a.x + b.x) / 2},${(a.y + b.y) / 2})`, tabindex: 0, role: 'button', 'aria-label': `Verbindung ${a.name} – ${b.name}: ${l.short}` });
         lb.dataset.link = l.id;
         linkEls.set(l.id, { line, lb });
@@ -1554,12 +1634,16 @@
     for (const l of board.links) { linkCount.set(l.a, (linkCount.get(l.a) || 0) + 1); linkCount.set(l.b, (linkCount.get(l.b) || 0) + 1); }
     const cols = [['bild', '', 'narrow'], ['name', 'Name', ''], ['faction', 'Fraktion', ''], ['short', 'Kurzbeschreibung', 'hide-sm'], ['place', 'Standort', 'hide-sm'], ['links', 'Verbindungen', 'hide-sm'], ['map', 'Karte', 'narrow hide-sm']];
     const val = (c, k) => (k === 'links' ? linkCount.get(c.id) || 0 : k === 'map' ? (c.mapPos ? 1 : 0)
-      : k === 'faction' ? (factionsOf(c).map((f) => f.name).join(', ') || '\uffff').toLowerCase() : (c[k] || '').toLowerCase());
+      : k === 'faction' ? (factionsOf(c).map((f) => f.name).join(', ') || '\uffff') : (c[k] || ''));
     function fill() {
-      const qy = tableFilter.trim().toLowerCase();
+      const qy = fold(tableFilter.trim());
       const rows = board.characters
-        .filter((c) => !qy || [c.name, c.short, c.place, c.info, ...factionsOf(c).map((f) => f.name), c.dead ? 'verstorben tot' : ''].some((s) => (s || '').toLowerCase().includes(qy)))
-        .sort((a, b) => { const x = val(a, tableSort.key), y = val(b, tableSort.key); return (x < y ? -1 : x > y ? 1 : 0) * tableSort.dir; });
+        .filter((c) => !qy || [c.name, c.short, c.place, c.info, ...factionsOf(c).map((f) => f.name), c.dead ? 'verstorben tot' : ''].some((s) => fold(s).includes(qy)))
+        .sort((a, b) => {
+          const x = val(a, tableSort.key), y = val(b, tableSort.key);
+          const r = typeof x === 'string' ? (x === y ? 0 : x === '\uffff' ? 1 : y === '\uffff' ? -1 : collator.compare(x, y)) : x - y;
+          return r * tableSort.dir;
+        });
       tbody.replaceChildren(...rows.map((c) => {
         const fs = factionsOf(c);
         const tr = el('tr', { tabindex: 0, onclick: () => charInfo(c.id) },
@@ -1637,6 +1721,7 @@
       installEvt.prompt();
       try { await installEvt.userChoice; } catch { /* egal */ }
       installEvt = null;
+      if (onInstallChange) onInstallChange();
     } else showInstallHelp();
   }
   function showInstallHelp() {
@@ -1657,8 +1742,12 @@
     modal('Desktop-Symbol erstellen?', el('p', { text: 'Möchtest du Charakter-Netz als App mit eigenem Symbol auf deinem Desktop bzw. Startbildschirm installieren? Dann startest du es wie ein normales Programm.' }),
       [btn('Nein, danke', closeModal, 'ghost'), btn('Ja, Symbol erstellen', () => { closeModal(); doInstall(); }, 'primary')]);
   }
-  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (!currentModal) askInstallOnce(); });
-  window.addEventListener('appinstalled', () => { installEvt = null; toast('App installiert!'); });
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault(); installEvt = e;
+    const shown = onInstallChange && onInstallChange(); // Einladungsseite zeigt den Knopf selbst
+    if (!shown && !currentModal) askInstallOnce();
+  });
+  window.addEventListener('appinstalled', () => { installEvt = null; installedNow = true; if (onInstallChange) onInstallChange(); toast('App installiert!'); });
 
   // ---------- Start ----------
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && currentModal && !currentModal.dataset.locked) closeModal(); });
@@ -1683,11 +1772,42 @@
         if (event === 'SIGNED_OUT' && me) setTimeout(() => { clearSessionState(); showAuth(); toast('Du bist nicht mehr angemeldet.'); }, 0);
       });
     }
+    // Bereits angemeldet (z. B. „Angemeldet bleiben“ in der installierten App) und eine Einladung wartet:
+    // sofort einlösen, das Board wird angehängt und geöffnet.
+    const pend = me ? getPending() : null;
+    if (pend) { clearPending(); if (pend !== location.hash) history.replaceState(null, '', location.pathname + location.search + pend); }
     await route();
     if (me) setTimeout(() => offerMigration(false), 800);
     // iOS und App-Browser (z. B. WhatsApp) haben keine Installations-Abfrage -> Anleitung einmal zeigen
-    if ((isIOS || inAppBrowser) && !isStandalone()) setTimeout(() => { if (!currentModal && (inAppBrowser || !store('cn-install-asked'))) { store('cn-install-asked', '1'); showInstallHelp(); } }, 1500);
+    if ((isIOS || inAppBrowser) && !isStandalone()) setTimeout(() => { if (!currentModal && !(onInstallChange && !me) && (inAppBrowser || !store('cn-install-asked'))) { store('cn-install-asked', '1'); showInstallHelp(); } }, 1500);
   }
-  if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  // ---------- Updates ----------
+  // Neue Versionen kommen automatisch: Der Service Worker lädt immer zuerst vom Server. Läuft eine ältere
+  // Fassung noch im offenen Fenster, erscheint ein Hinweis zum Neuladen. Eine Neuinstallation ist nie nötig.
+  function showUpdateBanner() {
+    if (document.querySelector('.update-banner')) return;
+    const bar = el('div', { class: 'update-banner', role: 'status' },
+      el('span', { text: 'Eine neue Version von Charakter-Netz ist da.' }),
+      btn('Jetzt aktualisieren', () => location.reload(), 'primary small'),
+      btn('Später', () => bar.remove(), 'ghost small'));
+    document.body.append(bar);
+  }
+  if ('serviceWorker' in navigator) {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) showUpdateBanner(); });
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+        const check = () => reg.update().catch(() => {});
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+        setInterval(check, 30 * 60000);
+      }).catch(() => {});
+    });
+  }
+  // Link geöffnet, während die installierte App schon läuft (Chrome/Edge): Einladung im offenen Fenster öffnen
+  if ('launchQueue' in window) {
+    window.launchQueue.setConsumer((p) => {
+      try { const h = new URL(p.targetURL).hash; if (INVITE_RE.test(h) && h !== location.hash) location.hash = h; } catch { /* egal */ }
+    });
+  }
   start();
 })();

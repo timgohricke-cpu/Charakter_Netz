@@ -5,7 +5,7 @@ Boards mit **Charaktertabelle**, **Charakternetz** und **Weltkarte**. Läuft als
 **Live:** https://timgohricke-cpu.github.io/Charakter_Netz/
 
 ## Funktionen
-- **Konto:** Registrierung und Anmeldung mit eindeutigem Benutzernamen und Passwort, „Angemeldet bleiben“, Passwort ändern, Konto löschen
+- **Konto:** Registrierung und Anmeldung mit eindeutigem Benutzernamen (auch japanisch) und Passwort, „Angemeldet bleiben“, Passwort ändern, Konto löschen
 - **Startseite:** „Meine Boards“ (bearbeiten, umbenennen, teilen, exportieren, löschen) und „Mit mir geteilt“ (über einen Link besuchte Boards, nur ansehen)
 - **Teilen:** „Link teilen“ erzeugt einen Freigabe-Link (Teilen-Menü des Handys, WhatsApp oder Kopieren). Wer den Link öffnet, meldet sich an und sieht das Board im Nur-Lesen-Modus. Der Ersteller sieht, wer Zugriff hat, und kann den Link jederzeit erneuern (der alte wird ungültig) und alle Besucher entfernen
 - **Charakternetz:** Kreise frei platzieren, mit Bild ausstatten, verbinden; Kurzbeschreibung auf der Linie, Klick öffnet die lange Beschreibung

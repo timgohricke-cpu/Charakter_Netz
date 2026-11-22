@@ -55,7 +55,7 @@ html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, "Noto Sans JP", "Noto Sans CJK JP", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 #app { height: 100%; display: flex; flex-direction: column; }
@@ -219,6 +219,7 @@ legend { padding: 0 6px; font-weight: 600; }
   .hide-sm { display: none; }
   .unplaced { width: 160px; }
   .toolbar input[type=search] { min-width: 0; flex: 1; }
+  .toolbar input[type=search] + .spacer { display: none; }
 }
 
 /* ---------- Version 2: Anmeldung, Teilen, Konto ---------- */
@@ -291,3 +292,16 @@ input[type=color] { width: 40px; height: 34px; padding: 2px; border: 1px solid v
 th:focus-visible, tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Listen über Netz und Karte lassen sich auch per Finger scrollen */
 .legend, .unplaced { touch-action: pan-y; overscroll-behavior: contain; }
+/* Einladung: Schritte */
+.invite-box { flex-direction: column; align-items: stretch; gap: 6px; padding: 12px 14px; }
+.invite-title { margin: 0; font-weight: 700; }
+.steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
+.steps li p { margin: 2px 0 6px; color: var(--muted); font-size: 14px; }
+.steps li .btn { margin-top: 2px; }
+/* Hinweis auf neue Version */
+.update-banner { position: fixed; left: 50%; transform: translateX(-50%); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 120; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; background: var(--panel); border: 1px solid var(--accent-2); border-radius: 12px; padding: 10px 14px; box-shadow: var(--shadow); max-width: calc(100vw - 24px); }
+@media (max-width: 720px) {
+  .update-banner { bottom: calc(70px + env(safe-area-inset-bottom)); }
+  .auth { padding-top: 16px; }
+  .auth-card { padding: 16px; }
+}

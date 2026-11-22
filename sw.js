@@ -1,6 +1,8 @@
 'use strict';
 // Service Worker: macht die App offline-fähig und installierbar.
-const CACHE = 'charakter-netz-v3';
+// Updates: Bei jeder Veröffentlichung CACHE hochzählen (und APP_VERSION in app.js). Installierte Apps
+// holen sich die neue Fassung automatisch – eine Neuinstallation ist nie nötig.
+const CACHE = 'charakter-netz-v4';
 const ASSETS = [
   './', './index.html', './app.js', './style.css', './manifest.webmanifest',
   './config.js', './vendor/supabase.js',
@@ -8,7 +10,8 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // cache: 'reload' umgeht den Browser-Cache, damit wirklich die neue Version gespeichert wird
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {

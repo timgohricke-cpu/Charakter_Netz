@@ -15,7 +15,7 @@ language sql immutable set search_path = '' as $$ select 'users.charakter-netz.a
 -- ---------------------------------------------------------------------
 create table if not exists public.profiles (
   id         uuid primary key references auth.users (id) on delete cascade,
-  username   text not null check (username ~ '^[A-Za-z0-9_.-]{3,24}$'),
+  username   text not null,
   created_at timestamptz not null default now()
 );
 create unique index if not exists profiles_username_lower_idx on public.profiles (lower(username));
@@ -137,6 +137,25 @@ language sql stable security definer set search_path = '' as $$
   );
 $$;
 
+-- Benutzernamen: 2–24 Zeichen, Buchstaben/Ziffern . _ - sowie Japanisch (Hiragana, Katakana, Kanji).
+-- Gespeichert wird die NFKC-Form (z. B. Halbbreiten-Katakana -> normale Katakana, Vollbreiten-Buchstaben -> ASCII).
+create or replace function private.cn_username_ok(u text) returns boolean
+language sql immutable set search_path = '' as $$
+  select u is not null and u ~ '^[A-Za-z0-9_.\-々-〇ぁ-ゖゝ-ゟァ-ヺー-ヿ㐀-䶿一-鿿]{2,24}$';
+$$;
+-- Anmelde-Adresse (Pseudo-E-Mail) zu einem Benutzernamen. Muss genau zu emailFor() in app.js passen:
+-- reine ASCII-Namen: <name klein>@domain (wie bisher), sonst u+<40 Hex-Zeichen SHA-256>@domain
+create or replace function private.cn_email_for(u text) returns text
+language sql immutable set search_path = '' as $$
+  select case when u ~ '^[A-Za-z0-9_.-]+$' then lower(u)
+              else 'u+' || left(encode(pg_catalog.sha256(convert_to(lower(u), 'UTF8')), 'hex'), 40) end
+         || '@' || public.cn_email_domain();
+$$;
+revoke all on function private.cn_username_ok(text), private.cn_email_for(text) from public, anon, authenticated;
+-- Prüfregel für Benutzernamen (ersetzt die frühere reine ASCII-Regel)
+alter table public.profiles drop constraint if exists profiles_username_check;
+alter table public.profiles add constraint profiles_username_check check (private.cn_username_ok(username));
+
 -- Board-ID aus einem Speicherpfad "<board-id>/<datei>" lesen (ungültig -> null)
 create or replace function private.board_id_from_path(p text) returns uuid
 language plpgsql immutable set search_path = '' as $$
@@ -153,13 +172,13 @@ $$;
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = '' as $$
 declare
-  uname text := new.raw_user_meta_data ->> 'username';
+  uname text := normalize(btrim(new.raw_user_meta_data ->> 'username'), NFKC);
 begin
-  if uname is null or uname !~ '^[A-Za-z0-9_.-]{3,24}$' then
+  if not private.cn_username_ok(uname) then
     raise exception 'invalid_username';
   end if;
   -- Die Anmelde-Adresse muss exakt zum Benutzernamen passen
-  if lower(new.email) <> (lower(uname) || '@' || public.cn_email_domain()) then
+  if lower(new.email) <> private.cn_email_for(uname) then
     raise exception 'email_username_mismatch';
   end if;
   insert into public.profiles (id, username) values (new.id, uname);
@@ -400,7 +419,7 @@ language plpgsql security definer set search_path = '' as $$
 begin
   if new.email is distinct from old.email and not exists (
     select 1 from public.profiles p
-     where p.id = new.id and lower(new.email) = lower(p.username) || '@' || public.cn_email_domain()) then
+     where p.id = new.id and lower(new.email) = private.cn_email_for(p.username)) then
     raise exception 'email_change_not_allowed';
   end if;
   return new;

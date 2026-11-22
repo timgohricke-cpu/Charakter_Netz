@@ -26,7 +26,7 @@ Statische PWA ohne Build-Schritt und ohne externe Bibliotheken zur Laufzeit, geh
 | `config.js` | Supabase-URL, öffentlicher *publishable key*, `EMAIL_DOMAIN` |
 | `app.js` | Gesamte App (ca. 1600 Zeilen, ein IIFE, kein Framework) |
 | `style.css` | Design inkl. Hell-/Dunkelmodus über CSS-Variablen (`:root` / `:root[data-theme=light]`) |
-| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v3`** – bei jeder Änderung an App-Dateien hochzählen |
+| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v4`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.4) |
 | `vendor/supabase.js` | `@supabase/supabase-js` 2.119.2, lokal mit esbuild gebündelt (IIFE, global `supabase`) |
 | `supabase/schema.sql` | Komplettes Datenbank-Skript; **idempotent** (kann jederzeit erneut ausgeführt werden) |
 | `manifest.webmanifest`, Icons | Installation als App |
@@ -53,7 +53,9 @@ npx esbuild entry.js --bundle --minify --format=iife --global-name=supabase --ta
 - Trigger `cn_protect_email` auf `auth.users`: Die Anmelde-Adresse kann nachträglich nicht geändert werden
 
 ### Anmeldung
-Benutzername + Passwort über Supabase Auth mit Pseudo-E-Mail `<name kleingeschrieben>@users.charakter-netz.app`.
+Benutzername + Passwort über Supabase Auth mit Pseudo-E-Mail.
+- Erlaubte Benutzernamen: 2–24 Zeichen, `A–Z a–z 0–9 . _ -` sowie **Japanisch** (Hiragana, Katakana, Kanji, ー, 々). Gespeichert wird die NFKC-Form (Halbbreiten-Katakana → normale Katakana, Vollbreiten-Buchstaben → ASCII). Regel doppelt: `USERNAME_RE` in `app.js` und `private.cn_username_ok()` in `schema.sql` – **immer beide gleich ändern**.
+- Pseudo-E-Mail: reine ASCII-Namen `<name klein>@users.charakter-netz.app` (wie bisher); sonst `u+<erste 40 Hex-Zeichen von SHA-256(name klein)>@users.charakter-netz.app`. Doppelt: `emailFor()` in `app.js` und `private.cn_email_for()` – **müssen übereinstimmen**, sonst schlägt die Registrierung fehl.
 In Supabase muss **„Confirm email“ ausgeschaltet** sein. Kein Passwort-Reset per E-Mail möglich (nur im Dashboard unter *Users*).
 
 ### Freigabe-Links
@@ -74,7 +76,10 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 **Tastatur:** Kreise und Linienbeschriftungen im Netz sind per Tab erreichbar, Enter öffnet sie.
 **Hell-/Dunkelmodus:** ☀️/🌙 in der Kopfleiste, wird gespeichert, Start nach Systemeinstellung.
 **Import/Export:** JSON (Format-Version 2, inkl. Bilder als Data-URL, Fraktionen, Status); alte V1-Dateien werden weiter angenommen.
-**Installation:** Abfrage „Desktop-Symbol erstellen?“, Anleitung für iPhone und für den WhatsApp-Browser („Im Browser öffnen“).
+**Installation:** Abfrage „Desktop-Symbol erstellen?“ (einmal je Browser), Knopf „⬇ App installieren“, Anleitung für iPhone und für den WhatsApp-Browser („Im Browser öffnen“).
+**Updates:** Nie neu installieren nötig. Der Service Worker lädt immer zuerst vom Server (`updateViaCache: 'none'`, Prüfung beim Zurückkehren in die App und alle 30 min). Läuft im offenen Fenster noch die alte Fassung, erscheint „Eine neue Version ist da – Jetzt aktualisieren“. **Nie ändern:** `id`, `start_url`, `scope` im Manifest und den Pfad `/Charakter_Netz/` – sonst sehen Browser es als neue App.
+**Einladungen:** Freigabe-Link abgemeldet geöffnet → Einladung wird 2 Tage in `localStorage` (`cn-invite`) gemerkt (überlebt Installation, Browser und installierte App teilen sich den Speicher; auf dem iPhone nicht – dort zuerst Konto im Browser anlegen). Einladungsseite mit Schritten: 1. App installieren (Knopf, wenn der Browser es anbietet), 2. Konto erstellen (Reiter „Registrieren“ vorausgewählt) oder anmelden, 3. Board wird automatisch angehängt und geöffnet („… wurde zu ‚Mit mir geteilt‘ hinzugefügt“). Ist man beim Start schon angemeldet und eine Einladung wartet, wird sie sofort eingelöst. Manifest: `handle_links: preferred`, `launch_handler` + `launchQueue` öffnen Links in der laufenden App.
+**Japanisch:** Alle Texte erlauben beliebige Zeichen. Suche ignoriert Groß/klein, Voll-/Halbbreite und Hiragana/Katakana; Sortierung mit `Intl.Collator(['de','ja'])`; Enter während der IME-Umwandlung löst nichts aus; Beschriftungsbreite rechnet breite Zeichen doppelt; japanische Schriften in der Font-Liste.
 
 ## Sicherheit
 - Row Level Security auf allen Tabellen und im Storage, anon-Rolle ohne Tabellenrechte
