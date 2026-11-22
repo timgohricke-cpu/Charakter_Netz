@@ -26,7 +26,7 @@
   const SB_KEY = String(CFG.SUPABASE_KEY || '');
   const EMAIL_DOMAIN = String(CFG.EMAIL_DOMAIN || 'users.charakter-netz.app');
   const BUCKET = 'board-images';
-  const APP_VERSION = '2.4'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
+  const APP_VERSION = '2.5'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
   const CONFIGURED = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(SB_URL) && SB_KEY.length > 20 && !!window.supabase;
   // Benutzernamen: 2–24 Zeichen, Buchstaben/Ziffern . _ - sowie Japanisch (Hiragana, Katakana, Kanji).
   // Muss zu private.cn_username_ok() in supabase/schema.sql passen.
@@ -143,6 +143,9 @@
     if (m) m.setAttribute('content', t === 'light' ? '#ffffff' : '#1b1f2a');
   }
   applyTheme(store(THEME_KEY) || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  function appShareButton() {
+    return el('button', { class: 'icon-btn', type: 'button', title: 'App weiterempfehlen', 'aria-label': 'App weiterempfehlen', onclick: () => shareAppDialog() }, '📣');
+  }
   function themeButton() {
     const label = () => (currentTheme() === 'light' ? 'Dunkles Design' : 'Helles Design');
     const b = el('button', { class: 'icon-btn theme-btn', type: 'button', title: label(), 'aria-label': label() }, currentTheme() === 'light' ? '🌙' : '☀️');
@@ -574,7 +577,7 @@
     $('#app').replaceChildren(
       el('header', { class: 'topbar' },
         el('div', { class: 'brand' }, el('img', { src: 'icon.svg', alt: '', class: 'logo' }), el('span', { text: 'Charakter-Netz' })),
-        el('div', { class: 'spacer' }), themeButton(), installButton()),
+        el('div', { class: 'spacer' }), themeButton(), appShareButton(), installButton()),
       el('main', { class: 'auth' }, el('div', { class: 'auth-card' },
         invite ? inviteBox(isReg) : (pending ? el('div', { class: 'banner invite' }, el('span', { text: 'Bitte melde dich an, um das Board zu öffnen.' })) : null),
         el('div', { class: 'tabs', role: 'tablist' },
@@ -695,7 +698,7 @@
   function topbarHome() {
     return el('header', { class: 'topbar' },
       el('div', { class: 'brand' }, el('img', { src: 'icon.svg', alt: '', class: 'logo' }), el('span', { class: 'hide-xs', text: 'Charakter-Netz' })),
-      el('div', { class: 'spacer' }), themeButton(), installButton(),
+      el('div', { class: 'spacer' }), themeButton(), appShareButton(), installButton(),
       el('button', { class: 'btn ghost small user-btn', type: 'button', onclick: accountDialog, title: 'Mein Konto' }, '👤 ', el('span', { text: me.username })));
   }
   async function showHome() {
@@ -727,7 +730,7 @@
           el('p', { text: `${count(b.characters)} Charaktere · ${count(b.links)} Verbindungen` }),
           el('small', { text: 'Geändert: ' + new Date(b.updated_at).toLocaleString('de-DE') })),
         el('div', { class: 'board-tools' },
-          btn('Teilen', () => shareDialog(b.id, b.name), 'ghost small'),
+          btn('📤 Einladen', () => shareDialog(b.id, b.name), 'ghost small'),
           btn('Umbenennen', () => askText('Board umbenennen', 'Name', b.name, async (v) => {
             mustAffect(await q(sb.from('boards').update({ name: v }).eq('id', b.id).select('id'))); showHome();
           }), 'ghost small'),
@@ -777,25 +780,62 @@
   }
 
   // ---------- Teilen ----------
+  // Teilen-Knöpfe: Teilen-Menü des Geräts (WhatsApp, Discord, Telegram, Mail … – alles, was installiert ist)
+  // plus direkte Wege als Rückfall. get() liefert jeweils den aktuellen { title, text, url }.
+  function shareButtons(get) {
+    const msg = () => { const d = get(); return `${d.text} ${d.url}`; };
+    const copy = async (silent) => {
+      const { url } = get();
+      try { await navigator.clipboard.writeText(url); if (!silent) toast('Link kopiert.'); return true; } catch { toast('Kopieren ging nicht – bitte den Link oben markieren und kopieren.'); return false; }
+    };
+    const native = async () => {
+      const d = get();
+      try { await navigator.share({ title: d.title, text: d.text, url: d.url }); } catch (e) { if (e && e.name !== 'AbortError') copy(); }
+    };
+    const ext = (label, href, cls = '') => {
+      const a = el('a', { class: 'btn small share-opt ' + cls, target: '_blank', rel: 'noopener noreferrer', href: '#' }, label);
+      a.addEventListener('click', () => a.setAttribute('href', href())); // immer mit dem aktuellen Link
+      a.setAttribute('href', href());
+      return a;
+    };
+    const discord = btn('Discord', async () => {
+      if (await copy(true)) toast('Link kopiert – in Discord einfach in den Chat einfügen.');
+      window.open('https://discord.com/channels/@me', '_blank', 'noopener,noreferrer');
+    }, 'small share-opt');
+    return el('div', { class: 'share-box' },
+      navigator.share ? btn('📤 Teilen … (WhatsApp, Discord, Mail …)', native, 'primary wide') : null,
+      el('div', { class: 'share-grid' },
+        ext('WhatsApp', () => 'https://api.whatsapp.com/send?text=' + encodeURIComponent(msg())),
+        ext('Telegram', () => 'https://t.me/share/url?url=' + encodeURIComponent(get().url) + '&text=' + encodeURIComponent(get().text)),
+        discord,
+        ext('E-Mail', () => 'mailto:?subject=' + encodeURIComponent(get().title) + '&body=' + encodeURIComponent(msg())),
+        isMobileDevice ? ext('SMS', () => 'sms:?&body=' + encodeURIComponent(msg())) : null,
+        btn('🔗 Link kopieren', () => copy(false), navigator.share ? 'small share-opt' : 'small share-opt primary')));
+  }
+  const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const appUrl = () => location.origin + location.pathname;
+
+  // Die App allgemein weiterempfehlen (ohne Board) – darf jeder
+  function shareAppDialog() {
+    const url = appUrl();
+    const inp = el('input', { type: 'text', readonly: true, value: url, 'aria-label': 'Link zur App' });
+    inp.addEventListener('focus', () => inp.select());
+    modal('Charakter-Netz weiterempfehlen', el('div', { class: 'form' },
+      el('p', { text: 'Teile den Link zur App. Damit lädst du niemanden zu einem Board ein – jeder kann sich ein eigenes Konto anlegen.' }),
+      inp,
+      shareButtons(() => ({ title: 'Charakter-Netz', text: 'Schau dir Charakter-Netz an – Charaktere, Beziehungen und Weltkarten für deine Kampagne:', url }))),
+    [btn('Fertig', closeModal, 'primary')]);
+  }
+
+  // Zu einem Board einladen – nur der Ersteller (der Server gibt den Freigabe-Schlüssel nur ihm heraus)
   async function shareDialog(bid, name) {
     let token;
     try { token = await q(sb.rpc('get_share_token', { p_board: bid })); } catch (e) { toast(errMsg(e)); return; }
-    if (!token) { toast('Dafür hast du keine Berechtigung.'); return; }
-    const base = location.origin + location.pathname;
-    const linkOf = (t) => `${base}#/s/${bid}/${t}`;
+    if (!token) { toast('Nur der Ersteller kann zu diesem Board einladen.'); return; }
+    const linkOf = (t) => `${appUrl()}#/s/${bid}/${t}`;
     let link = linkOf(token);
-    const inp = el('input', { type: 'text', readonly: true, value: link, 'aria-label': 'Freigabe-Link' });
+    const inp = el('input', { type: 'text', readonly: true, value: link, 'aria-label': 'Einladungslink' });
     inp.addEventListener('focus', () => inp.select());
-    const text = () => `Schau dir mein Board „${name}“ in Charakter-Netz an: ${link}`;
-    const copy = async () => {
-      try { await navigator.clipboard.writeText(link); toast('Link kopiert.'); } catch { inp.focus(); inp.select(); toast('Bitte den markierten Link kopieren.'); }
-    };
-    const share = async () => {
-      try { await navigator.share({ title: name, text: `Schau dir mein Board „${name}“ in Charakter-Netz an:`, url: link }); } catch (e) { if (e && e.name !== 'AbortError') copy(); }
-    };
-    const wa = el('a', { class: 'btn small', href: '#', target: '_blank', rel: 'noopener noreferrer' }, 'Per WhatsApp senden');
-    const setWa = () => wa.setAttribute('href', 'https://api.whatsapp.com/send?text=' + encodeURIComponent(text()));
-    setWa();
     const visitors = el('ul', { class: 'link-list' }, el('li', { class: 'muted', text: 'Lädt …' }));
     const loadVisitors = async () => {
       try {
@@ -806,16 +846,16 @@
     };
     const reset = (removeAll) => async () => {
       const t = await q(sb.rpc('reset_share_link', { p_board: bid, p_remove_visitors: removeAll }));
-      link = linkOf(t); inp.value = link; setWa();
+      link = linkOf(t); inp.value = link;
       toast(removeAll ? 'Neuer Link erstellt, alle Besucher entfernt.' : 'Neuer Link erstellt. Der alte Link funktioniert nicht mehr.');
       loadVisitors();
     };
     const r1 = btn('Neuen Link erzeugen', () => busy(r1, reset(false)).catch((e) => toast(errMsg(e))), 'ghost small');
     const r2 = btn('Neuer Link + alle Besucher entfernen', () => busy(r2, reset(true)).catch((e) => toast(errMsg(e))), 'ghost small danger');
-    modal('Board teilen', el('div', { class: 'form' },
-      el('p', { text: 'Wer diesen Link öffnet, muss sich anmelden oder registrieren und kann das Board danach ansehen, aber nicht verändern.' }),
+    modal('Zum Board einladen', el('div', { class: 'form' },
+      el('p', { text: `Schicke diesen Link an Mitspieler. Wer ihn öffnet, installiert bei Bedarf die App, meldet sich an oder registriert sich – danach ist „${name}“ in seinem Konto unter „Mit mir geteilt“ (nur ansehen).` }),
       inp,
-      el('div', { class: 'row' }, navigator.share ? btn('Teilen …', share, 'primary small') : null, btn('Link kopieren', copy, navigator.share ? 'small' : 'primary small'), wa),
+      shareButtons(() => ({ title: `Einladung: ${name}`, text: `Ich lade dich zu meinem Board „${name}“ in Charakter-Netz ein:`, url: link })),
       el('fieldset', {}, el('legend', { text: 'Wer hat Zugriff?' }), visitors,
         el('p', { class: 'muted', text: 'Wenn der Link in falsche Hände geraten ist: Erzeuge einen neuen Link. Der alte wird sofort ungültig.' }),
         el('div', { class: 'row' }, r1, r2)))
@@ -973,7 +1013,7 @@
         el('h1', { class: 'board-title', text: board.name }),
         canEdit() ? null : el('span', { class: 'badge', title: 'Du kannst dieses Board nur ansehen.', text: '👁 Nur ansehen' + (board.ownerName ? ' · von ' + board.ownerName : '') }),
         el('div', { class: 'spacer' }),
-        canEdit() ? el('button', { class: 'btn small primary share-btn', type: 'button', title: 'Link teilen', onclick: () => shareDialog(board.id, board.name) }, '🔗', el('span', { class: 'lbl', text: ' Link teilen' })) : null,
+        canEdit() ? el('button', { class: 'btn small primary share-btn', type: 'button', title: 'Board teilen / einladen', 'aria-label': 'Board teilen', onclick: () => shareDialog(board.id, board.name) }, '📤', el('span', { class: 'lbl', text: ' Board teilen' })) : null,
         themeButton(), installButton()),
       el('div', { class: 'board-layout' }, nav, main));
     if (view === 'tabelle') renderTable(main);
@@ -1794,7 +1834,15 @@
   }
   if ('serviceWorker' in navigator) {
     const hadController = !!navigator.serviceWorker.controller;
-    navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) showUpdateBanner(); });
+    navigator.serviceWorker.addEventListener('controllerchange', async () => {
+      if (!hadController) return;
+      // Nur melden, wenn auf dem Server wirklich eine andere Version liegt als die, die gerade läuft
+      try {
+        const src = await (await fetch('app.js', { cache: 'no-store' })).text();
+        const v = (/APP_VERSION = '([^']+)'/.exec(src) || [])[1];
+        if (v && v !== APP_VERSION) showUpdateBanner();
+      } catch { /* offline: nichts melden */ }
+    });
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
         const check = () => reg.update().catch(() => {});

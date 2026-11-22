@@ -305,3 +305,10 @@ th:focus-visible, tbody tr:focus-visible { outline: 2px solid var(--accent); out
   .auth { padding-top: 16px; }
   .auth-card { padding: 16px; }
 }
+/* Teilen */
+.share-box { display: flex; flex-direction: column; gap: 10px; }
+.share-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.share-grid .btn { width: 100%; text-decoration: none; color: inherit; }
+.share-grid .btn.primary { color: #fff; }
+.update-banner { width: min(460px, calc(100vw - 24px)); }
+@media (max-width: 520px) { .share-grid { grid-template-columns: 1fr 1fr; } }

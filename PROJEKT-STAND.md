@@ -26,7 +26,7 @@ Statische PWA ohne Build-Schritt und ohne externe Bibliotheken zur Laufzeit, geh
 | `config.js` | Supabase-URL, öffentlicher *publishable key*, `EMAIL_DOMAIN` |
 | `app.js` | Gesamte App (ca. 1600 Zeilen, ein IIFE, kein Framework) |
 | `style.css` | Design inkl. Hell-/Dunkelmodus über CSS-Variablen (`:root` / `:root[data-theme=light]`) |
-| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v4`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.4) |
+| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v5`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.5) |
 | `vendor/supabase.js` | `@supabase/supabase-js` 2.119.2, lokal mit esbuild gebündelt (IIFE, global `supabase`) |
 | `supabase/schema.sql` | Komplettes Datenbank-Skript; **idempotent** (kann jederzeit erneut ausgeführt werden) |
 | `manifest.webmanifest`, Icons | Installation als App |
@@ -65,7 +65,9 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 ## Funktionen
 **Konto:** Registrieren, Anmelden, „Angemeldet bleiben“ (an: localStorage, aus: sessionStorage), Abmelden, Passwort ändern (mit altem Passwort), Konto löschen (mit Benutzername + Passwort, löscht Bilder, Boards, alles).
 **Startseite:** „Meine Boards“ (Teilen, Umbenennen, Exportieren, Löschen), „Mit mir geteilt“ (nur ansehen, aus Liste entfernen), Import, Banner zur Übernahme lokaler V1-Boards.
-**Teilen:** Teilen-Menü des Handys, WhatsApp-Link, Kopieren; Besucherliste; Link erneuern (optional alle Besucher entfernen).
+**Teilen / Einladen (nur Ersteller):** Knopf „📤 Board teilen“ in der Kopfleiste und „📤 Einladen“ auf der Board-Karte. Dialog mit „Teilen …“ (Teilen-Menü des Geräts: WhatsApp, Discord, Telegram, Mail … – `navigator.share`) und direkten Knöpfen WhatsApp, Telegram, Discord (Link kopieren + Discord öffnen, Discord hat keinen Teilen-Link), E-Mail, SMS (nur Handy), Link kopieren; Besucherliste; Link erneuern (optional alle Besucher entfernen). Besucher sehen keinen Teilen-Knopf, der Server gibt den Schlüssel nur dem Ersteller.
+**App weiterempfehlen (alle):** 📣 in der Kopfleiste (Startseite und Anmeldeseite) teilt nur den Link zur App, ohne Board.
+**Update-Hinweis:** erscheint nur, wenn auf dem Server wirklich eine andere `APP_VERSION` liegt.
 **Rechte:** Nur der Ersteller bearbeitet; Besucher sehen alles im Nur-Lesen-Modus (Hinweis „👁 Nur ansehen · von …“). Durchgesetzt per Row Level Security auf dem Server.
 **Charakternetz:** Kreise frei setzen (Modus „＋ Charakter“), ziehen, verbinden (Modus „🔗 Verbinden“), Linienbeschriftung (Kurzbeschreibung) über den Kreisen, Klick → Infokarte bzw. lange Beschreibung; Zoom (Mausrad, Pinch), „Alles zeigen“.
 **Fraktionen:** keine, eine oder mehrere je Charakter; Eingabe mit Vorschlägen und „+ Neue Fraktion anlegen“; Rand und Name in Farbabschnitten; ohne Fraktion neutral (dunkel: weiß); Verwaltung über „🎨 Fraktionen“ (Farbe, Name, Löschen); Legende oben rechts.
@@ -92,6 +94,10 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 - Bilder werden neu kodiert (entfernt GPS/EXIF), privat gespeichert
 - Der *publishable key* in `config.js` ist öffentlich gedacht. **Niemals** den `service_role`/secret key oder das Datenbank-Passwort ins Repo oder in einen Chat geben.
 
+## Tests
+**`bash tests/run_all.sh`** – statische Prüfungen, Datenbank (lokales Postgres, frisch + Upgrade + doppelt) und Oberfläche (Chrome headless mit nachgebautem Supabase). Am Ende muss „ALLE TESTS BESTANDEN“ stehen. Details und Live-Prüfliste: `tests/README.md`.
+Stand 22.11.2026: 22 statische + 230 Datenbank- + 78 Oberflächen-Prüfungen, alle bestanden.
+
 ## Arbeitsweise / Hinweise für Claude
 - Supabase ist aus der Cloud-Arbeitsumgebung von Claude **nicht erreichbar** (Proxy). Getestet wird im **Browser-Fenster der Claude-Desktop-App** auf der Live-Seite oder einer Testkopie (z. B. Unterordner `v2-test/` auf `main`, danach wieder löschen).
 - Änderungen an `supabase/schema.sql` muss **Tim selbst** im SQL Editor ausführen (Skript komplett einfügen → Run). Vorher lokal mit Postgres + nachgebautem `auth`/`storage`-Schema testen (frische Installation **und** Upgrade).
@@ -99,4 +105,6 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 - PostgREST-Einbettungen zwischen `boards` und `profiles` brauchen den Fremdschlüsselnamen (`profiles!boards_owner_id_fkey`), weil es zwei Wege gibt.
 - `boards` hat spaltenweise Rechte: nie `select('*')` auf `boards` verwenden.
 - Commit-Nachrichten auf Deutsch.
+- **Schreibzugriff:** Claude hatte bisher keine Schreibrechte auf das Repo. Änderungen werden als ZIP geliefert; Tim lädt sie über https://github.com/timgohricke-cpu/Charakter_Netz/upload/main hoch (Ordnerstruktur beibehalten). SQL immer **vor** den App-Dateien ausführen, wenn die neue App das neue SQL braucht.
+- Jede Lieferung enthält die aktualisierten Tests (`tests/`) und diese Datei.
 - Lokale Tests: `supabase/schema.sql` gegen Postgres 16 mit nachgebautem `auth`/`storage`-Schema (Rollen anon/authenticated, `auth.uid()` aus `request.jwt.claim.sub`); Oberfläche mit Playwright/Chrome und einem In-Memory-Nachbau des Supabase-Clients.
