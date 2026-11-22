@@ -26,7 +26,7 @@
   const SB_KEY = String(CFG.SUPABASE_KEY || '');
   const EMAIL_DOMAIN = String(CFG.EMAIL_DOMAIN || 'users.charakter-netz.app');
   const BUCKET = 'board-images';
-  const APP_VERSION = '2.6'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
+  const APP_VERSION = '2.7'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
   const CONFIGURED = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(SB_URL) && SB_KEY.length > 20 && !!window.supabase;
   // Benutzernamen: 2–24 Zeichen, Buchstaben/Ziffern . _ - sowie Japanisch (Hiragana, Katakana, Kanji).
   // Muss zu private.cn_username_ok() in supabase/schema.sql passen.
@@ -384,6 +384,124 @@
   const mapT = new Map();
   // Auswahl im Charakternetz (je Board, nur in diesem Fenster): Fraktionen, einzelne Charaktere,
   // jeweils mit/ohne verbundene Charaktere, Status (beide / lebende / verstorbene)
+  const layoutUndo = new Map(); // Board-ID -> Positionen vor „✨ Anordnen“ (nur in diesem Fenster)
+
+  // ---------- Automatisch anordnen ----------
+  // Jede Fraktion (und jede Kombination mehrerer Fraktionen) wird eine gleichmäßige Gruppe im Sonnenblumen-Muster,
+  // die Wichtigsten in der Mitte. Die Gruppen werden wie Kreise dicht gepackt: Gruppen mit vielen Verbindungen
+  // zueinander und Kombinationen neben ihren Fraktionen. Charaktere ohne Fraktion bilden eine eigene Gruppe.
+  // Danach entzerrt eine kurze Kräfte-Simulation (Verbindungen ziehen leicht, Gruppen halten zusammen,
+  // kein Kreis überlappt einen anderen). Ohne Zufall: gleiche Daten -> gleiche Anordnung.
+  function autoLayout(chars, links, factions) {
+    const out = new Map(); const n = chars.length;
+    if (!n) return out;
+    const fIds = new Set(factions.map((f) => f.id));
+    const facsOf = (c) => [...new Set((c.factionIds || []).filter((f) => fIds.has(f)))].sort();
+    const deg = new Map();
+    for (const l of links) { deg.set(l.a, (deg.get(l.a) || 0) + 1); deg.set(l.b, (deg.get(l.b) || 0) + 1); }
+    const S = 150; const GAP = 150;
+    const groups = new Map(); const keyOf = new Map();
+    for (const c of chars) { const k = facsOf(c).join('+'); keyOf.set(c.id, k); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
+    const keys = [...groups.keys()].sort((x, y) => groups.get(y).length - groups.get(x).length || x.localeCompare(y));
+    const gi = new Map(keys.map((k, i) => [k, i])); const G = keys.length;
+    // Verwandtschaft der Gruppen: Verbindungen zwischen ihnen + gemeinsame Fraktionen
+    const W = Array.from({ length: G }, () => new Float64Array(G));
+    for (const l of links) {
+      const a = keyOf.get(l.a), b = keyOf.get(l.b);
+      if (a == null || b == null || a === b) continue;
+      W[gi.get(a)][gi.get(b)] += 1; W[gi.get(b)][gi.get(a)] += 1;
+    }
+    const fsOf = keys.map((k) => new Set(k ? k.split('+') : []));
+    for (let i = 0; i < G; i++) for (let j = i + 1; j < G; j++) {
+      let sh = 0; for (const f of fsOf[i]) if (fsOf[j].has(f)) sh++;
+      if (sh) { const v = sh * 2 * Math.min(groups.get(keys[i]).length, groups.get(keys[j]).length) + 3 * sh; W[i][j] += v; W[j][i] += v; }
+    }
+    const rc = keys.map((k) => 40 + 0.62 * S * Math.sqrt(groups.get(k).length));
+    // Start: Gruppen auf einer Spirale (größte innen), dann Kreis-Packung mit Anziehung verwandter Gruppen
+    const GA = Math.PI * (3 - Math.sqrt(5));
+    const cx = new Float64Array(G), cy = new Float64Array(G);
+    const meanR = rc.reduce((a, b) => a + b, 0) / G;
+    for (let i = 0; i < G; i++) { const r = (meanR + GAP) * 1.1 * Math.sqrt(i); cx[i] = r * Math.cos(i * GA); cy[i] = r * Math.sin(i * GA); }
+    let wMax = 0; for (let i = 0; i < G; i++) for (let j = 0; j < G; j++) wMax = Math.max(wMax, W[i][j]);
+    const parentsOf = fsOf.map((fs) => (fs.size > 1 ? [...fs].map((f) => gi.get(f)).filter((j) => j != null) : []));
+    for (let it = 0; it < 500 && G > 1; it++) {
+      const cool = 1 - it / 500; const fx = new Float64Array(G), fy = new Float64Array(G);
+      for (let i = 0; i < G; i++) {
+        fx[i] -= cx[i] * 0.004; fy[i] -= cy[i] * 0.004; // leichte Schwerkraft zur Mitte
+        for (let j = i + 1; j < G; j++) {
+          let dx = cx[j] - cx[i], dy = cy[j] - cy[i]; let d = Math.hypot(dx, dy);
+          if (d < 0.01) { dx = Math.cos(i + j); dy = Math.sin(i + j); d = 1; }
+          const need = rc[i] + rc[j] + GAP; let f = 0;
+          if (d < need) f = -(need - d) * 0.5;
+          else if (W[i][j] > 0) f = (d - need) * 0.02 * (0.25 + W[i][j] / (wMax || 1));
+          fx[i] += (dx / d) * f; fy[i] += (dy / d) * f; fx[j] -= (dx / d) * f; fy[j] -= (dy / d) * f;
+        }
+      }
+      // Kombinationen (mehrere Fraktionen) zwischen ihre einzelnen Fraktionen ziehen
+      for (let i = 0; i < G; i++) {
+        const parts = parentsOf[i]; if (!parts.length) continue;
+        let mx = 0, my = 0; for (const j of parts) { mx += cx[j]; my += cy[j]; }
+        fx[i] += (mx / parts.length - cx[i]) * 0.06; fy[i] += (my / parts.length - cy[i]) * 0.06;
+      }
+      const lim = 10 + 120 * cool;
+      for (let i = 0; i < G; i++) { cx[i] += clamp(fx[i], -lim, lim); cy[i] += clamp(fy[i], -lim, lim); }
+    }
+    // Startpositionen der Charaktere im Sonnenblumen-Muster ihrer Gruppe
+    const ids = []; const X = []; const Y = []; const TX = []; const TY = []; const RAD = [];
+    keys.forEach((k, g) => {
+      const m = groups.get(k).slice().sort((a, b) => (deg.get(b.id) || 0) - (deg.get(a.id) || 0) || collator.compare(a.name, b.name));
+      m.forEach((c, i) => {
+        const r = S * 0.62 * Math.sqrt(i + 0.5);
+        ids.push(c.id); X.push(cx[g] + r * Math.cos(i * GA)); Y.push(cy[g] + r * Math.sin(i * GA)); TX.push(cx[g]); TY.push(cy[g]); RAD.push(radiusFor(deg.get(c.id)));
+      });
+    });
+    const N = ids.length; const ix = new Map(ids.map((id, i) => [id, i]));
+    const E = links.map((l) => [ix.get(l.a), ix.get(l.b)]).filter(([a, b]) => a != null && b != null && a !== b);
+    const gap = 64; const CELL = 2 * 52 + gap + 40;
+    const collide = (strength, fx, fy) => {
+      const grid = new Map();
+      for (let i = 0; i < N; i++) { const key = Math.floor(X[i] / CELL) + ',' + Math.floor(Y[i] / CELL); if (!grid.has(key)) grid.set(key, []); grid.get(key).push(i); }
+      let worst = 0;
+      for (let i = 0; i < N; i++) {
+        const gx = Math.floor(X[i] / CELL), gy = Math.floor(Y[i] / CELL);
+        for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+          const cell = grid.get((gx + ox) + ',' + (gy + oy)); if (!cell) continue;
+          for (const j of cell) {
+            if (j <= i) continue;
+            let dx = X[j] - X[i], dy = Y[j] - Y[i]; let d = Math.hypot(dx, dy);
+            if (d < 0.01) { dx = Math.cos(i + j); dy = Math.sin(i + j); d = 1; }
+            const need = RAD[i] + RAD[j] + gap;
+            if (d < need) {
+              const f = ((need - d) / d) * strength; worst = Math.max(worst, need - d);
+              fx[i] -= dx * f; fy[i] -= dy * f; fx[j] += dx * f; fy[j] += dy * f;
+            }
+          }
+        }
+      }
+      return worst;
+    };
+    const IT = 300;
+    for (let it = 0; it < IT; it++) {
+      const cool = 1 - it / IT; const fx = new Float64Array(N); const fy = new Float64Array(N);
+      for (let i = 0; i < N; i++) { fx[i] += (TX[i] - X[i]) * 0.035; fy[i] += (TY[i] - Y[i]) * 0.035; }
+      for (const [a, b] of E) {
+        const dx = X[b] - X[a], dy = Y[b] - Y[a]; const d = Math.hypot(dx, dy) || 1;
+        if (d > 230) { const f = ((d - 230) / d) * 0.004; fx[a] += dx * f; fy[a] += dy * f; fx[b] -= dx * f; fy[b] -= dy * f; }
+      }
+      collide(0.5, fx, fy);
+      const lim = 6 + 40 * cool;
+      for (let i = 0; i < N; i++) { X[i] += clamp(fx[i], -lim, lim); Y[i] += clamp(fy[i], -lim, lim); }
+    }
+    for (let it = 0; it < 300; it++) { // Zum Schluss nur noch Überlappungen auflösen
+      const fx = new Float64Array(N); const fy = new Float64Array(N);
+      if (collide(0.5, fx, fy) < 0.5) break;
+      for (let i = 0; i < N; i++) { X[i] += fx[i]; Y[i] += fy[i]; }
+    }
+    const mx = X.reduce((a, b) => a + b, 0) / N, my = Y.reduce((a, b) => a + b, 0) / N;
+    for (let i = 0; i < N; i++) out.set(ids[i], { x: Math.round(clamp(X[i] - mx, -1e6, 1e6)), y: Math.round(clamp(Y[i] - my, -1e6, 1e6)) });
+    return out;
+  }
+  window.__cnLayout = autoLayout; // für die automatischen Tests (keine Daten, nur Rechnen)
   const focusStates = new Map();
   function focusOf(bid) {
     if (!focusStates.has(bid)) focusStates.set(bid, { factions: new Set(), chars: new Set(), fNb: false, cNb: true, life: 'all', open: false });
@@ -1400,9 +1518,9 @@
     const svg = sv('svg', { class: 'net', role: 'img', 'aria-label': 'Charakternetz' });
     const defs = sv('defs'); const cp = sv('clipPath', { id: 'clipc', clipPathUnits: 'objectBoundingBox' }); cp.append(sv('circle', { cx: 0.5, cy: 0.5, r: 0.5 })); defs.append(cp);
     const grads = sv('g'); defs.append(grads); // Farbverläufe für Namen mit mehreren Fraktionen
-    const vp = sv('g'); const gl = sv('g'); const gn = sv('g'); const glb = sv('g'); // Beschriftungen über den Kreisen
+    const vp = sv('g'); const gIsl = sv('g', { class: 'islands' }); const gIslN = sv('g', { class: 'island-names' }); const gl = sv('g'); const gn = sv('g'); const glb = sv('g'); // Inseln ganz unten, Beschriftungen über den Kreisen
     const rubber = sv('line', { class: 'rubber' }); rubber.style.display = 'none';
-    vp.append(gl, rubber, gn, glb); svg.append(defs, vp); wrap.append(svg);
+    vp.append(gIsl, gIslN, gl, rubber, gn, glb); svg.append(defs, vp); wrap.append(svg);
     const hint = el('div', { class: 'hint' });
 
     // ---- Auswahl: Wer ist hervorgehoben, wer nur noch minimal sichtbar? ----
@@ -1453,6 +1571,8 @@
       clearBtn.hidden = !on;
       if (countEl) countEl.textContent = `${shown} von ${board.characters.length} sichtbar`;
       if (legendEl) for (const it of legendEl.querySelectorAll('[data-faction]')) it.setAttribute('aria-pressed', String(F.factions.has(it.dataset.faction)));
+      if (linkEls.size) cullLabels();
+      cullNames();
     }
     const panel = el('div', { class: 'focus-panel', role: 'region', 'aria-label': 'Auswahl' });
     panel.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -1536,20 +1656,40 @@
       hint.textContent = txt[netMode] || txt.move;
     }
 
-    const linkEls = new Map(); // Verbindungs-ID -> { line, lb }
+    const linkEls = new Map(); // Verbindungs-ID -> { g, path, lb, w, px, py }
+    let curDeg = new Map();
+    // Leicht gebogene Linie (höchstens 36 px Bogen, immer zur selben Seite); Beschriftung rückt zum weniger
+    // verbundenen Ende, damit sie sich nicht um stark vernetzte Figuren stapelt
+    function linkGeom(a, b) {
+      const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+      const off = Math.min(36, len * 0.08) * (a.id < b.id ? 1 : -1);
+      const cx = (a.x + b.x) / 2 - (dy / len) * off, cy = (a.y + b.y) / 2 + (dx / len) * off;
+      const da = curDeg.get(a.id) || 0, db = curDeg.get(b.id) || 0;
+      const t = da === db ? 0.5 : da > db ? 0.64 : 0.36; const u = 1 - t;
+      return { d: `M${a.x},${a.y} Q${cx.toFixed(1)},${cy.toFixed(1)} ${b.x},${b.y}`, px: u * u * a.x + 2 * u * t * cx + t * t * b.x, py: u * u * a.y + 2 * u * t * cy + t * t * b.y };
+    }
+    // Farbe einer Verbindung: gemeinsame Fraktion (die erste des ersten Charakters), sonst neutral grau
+    function sharedColor(a, b) {
+      const fb = new Set(b.factionIds || []);
+      const f = (a.factionIds || []).map(byFaction).find((x) => x && fb.has(x.id));
+      return f && COLOR_RE.test(f.color) ? f.color : null;
+    }
     function drawLinks() {
-      gl.replaceChildren(); glb.replaceChildren(); linkEls.clear();
+      gl.replaceChildren(); glb.replaceChildren(); linkEls.clear(); curDeg = degrees();
       for (const l of board.links) {
         const a = byId(l.a), b = byId(l.b);
         if (!a || !b) continue;
-        const g = sv('g', { class: 'link' });
-        const line = sv('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y });
-        g.append(line);
+        const col = sharedColor(a, b);
+        const g = sv('g', { class: 'link' + (col ? ' shared' : '') });
+        paint(g, col);
+        const geo = linkGeom(a, b);
+        const path = sv('path', { d: geo.d });
+        g.append(path);
         const label = trunc(l.short || '…', 32);
         const w = textUnits(label) * 6.8 + 16;
-        const lb = sv('g', { class: 'link-label', transform: `translate(${(a.x + b.x) / 2},${(a.y + b.y) / 2})`, tabindex: 0, role: 'button', 'aria-label': `Verbindung ${a.name} – ${b.name}: ${l.short}` });
+        const lb = sv('g', { class: 'link-label', transform: `translate(${geo.px},${geo.py})`, tabindex: 0, role: 'button', 'aria-label': `Verbindung ${a.name} – ${b.name}: ${l.short}` });
         lb.dataset.link = l.id;
-        linkEls.set(l.id, { line, lb, g });
+        linkEls.set(l.id, { g, path, lb, w, px: geo.px, py: geo.py });
         lb.append(sv('rect', { x: -w / 2, y: -11, width: w, height: 22, rx: 11 }));
         const t = sv('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }); t.textContent = label;
         const tt = sv('title'); tt.textContent = l.short;
@@ -1562,18 +1702,148 @@
         if (l.a !== cid && l.b !== cid) continue;
         const e = linkEls.get(l.id); const a = byId(l.a), b = byId(l.b);
         if (!e || !a || !b) continue;
-        e.line.setAttribute('x1', a.x); e.line.setAttribute('y1', a.y); e.line.setAttribute('x2', b.x); e.line.setAttribute('y2', b.y);
-        e.lb.setAttribute('transform', `translate(${(a.x + b.x) / 2},${(a.y + b.y) / 2})`);
+        const geo = linkGeom(a, b); e.px = geo.px; e.py = geo.py;
+        e.path.setAttribute('d', geo.d);
+        e.lb.setAttribute('transform', `translate(${geo.px},${geo.py})`);
       }
     }
+    // Beschriftungen ohne Überlappung: wichtigere zuerst (hervorgehobene, dann stark vernetzte Enden);
+    // was sich mit einer schon gesetzten Beschriftung oder einem Kreis überschneidet, wird ausgeblendet
+    // (erscheint beim Darüberfahren, bei Tastatur-Fokus oder in der Auswahl).
+    function cullLabels() {
+      const CELL = 160; const grid = new Map();
+      const keys = (x0, y0, x1, y1) => { const r = []; for (let gx = Math.floor(x0 / CELL); gx <= Math.floor(x1 / CELL); gx++) for (let gy = Math.floor(y0 / CELL); gy <= Math.floor(y1 / CELL); gy++) r.push(gx + ',' + gy); return r; };
+      const put = (o, x0, y0, x1, y1) => { for (const k of keys(x0, y0, x1, y1)) { if (!grid.has(k)) grid.set(k, []); grid.get(k).push(o); } };
+      const deg = curDeg;
+      const dimmed = new Set([...gn.children].filter((n) => n.classList.contains('dim')).map((n) => n.dataset.char));
+      for (const c of board.characters) {
+        if (dimmed.has(c.id) || hovId) continue; // beim Hover zählen nur Überschneidungen der Beschriftungen untereinander
+        const r = radiusFor(deg.get(c.id)) + 2; put({ c: true, x: c.x, y: c.y, r }, c.x - r, c.y - r, c.x + r, c.y + r);
+      }
+      const hit = (o, x0, y0, x1, y1) => {
+        if (o.c) { const nx = clamp(o.x, x0, x1), ny = clamp(o.y, y0, y1); return Math.hypot(o.x - nx, o.y - ny) < o.r; }
+        return x0 < o.x1 && x1 > o.x0 && y0 < o.y1 && y1 > o.y0;
+      };
+      const items = [];
+      for (const l of board.links) {
+        const e = linkEls.get(l.id); if (!e) continue;
+        if (e.lb.classList.contains('dim')) { e.lb.classList.remove('culled'); continue; }
+        if (hovId && !e.lb.classList.contains('hov')) { e.lb.classList.add('culled'); continue; } // beim Hover nur dessen Verbindungen
+        items.push({ e, p: (e.lb.classList.contains('hl') ? 1e6 : 0) + (deg.get(l.a) || 0) + (deg.get(l.b) || 0) });
+      }
+      items.sort((x, y) => y.p - x.p);
+      for (const { e } of items) {
+        const x0 = e.px - e.w / 2 - 3, x1 = e.px + e.w / 2 + 3, y0 = e.py - 14, y1 = e.py + 14;
+        let free = true;
+        for (const k of keys(x0, y0, x1, y1)) { const cell = grid.get(k); if (cell && cell.some((o) => hit(o, x0, y0, x1, y1))) { free = false; break; } }
+        e.lb.classList.toggle('culled', !free);
+        if (free) put({ x0, y0, x1, y1 }, x0, y0, x1, y1);
+      }
+    }
+    // Fraktionsinseln: zart gefärbte Fläche um alle Charaktere, die genau diese eine Fraktion haben.
+    // Verzweigt entlang des kürzesten Verbindungsbaums; weit entfernte Gruppen werden eigene Inseln.
+    let islandsOn = store('cn-islands') !== '0';
+    let islandRaf = 0;
+    function drawIslands() {
+      gIsl.replaceChildren(); gIslN.replaceChildren();
+      if (!islandsOn) return;
+      const MAXD = 430;
+      for (const f of board.factions) {
+        if (!COLOR_RE.test(f.color)) continue;
+        const mem = board.characters.filter((c) => (c.factionIds || []).length === 1 && c.factionIds[0] === f.id);
+        if (!mem.length) continue;
+        const n = mem.length; const inT = new Array(n).fill(false); const best = new Array(n).fill(Infinity); const par = new Array(n).fill(-1);
+        const root = Array.from({ length: n }, (_, i) => i); const find = (i) => (root[i] === i ? i : (root[i] = find(root[i])));
+        best[0] = 0; const edges = [];
+        for (let k = 0; k < n; k++) { // Prim: kürzester Verbindungsbaum
+          let u = -1; for (let i = 0; i < n; i++) if (!inT[i] && (u < 0 || best[i] < best[u])) u = i;
+          inT[u] = true; if (par[u] >= 0) edges.push([par[u], u, best[u]]);
+          for (let v = 0; v < n; v++) if (!inT[v]) { const d = Math.hypot(mem[u].x - mem[v].x, mem[u].y - mem[v].y); if (d < best[v]) { best[v] = d; par[v] = u; } }
+        }
+        const g = sv('g', { class: 'island' }); paint(g, f.color); g.dataset.faction = f.id;
+        for (const [a, b, d] of edges) {
+          if (d > MAXD) continue;
+          root[find(a)] = find(b);
+          g.append(sv('line', { x1: mem[a].x, y1: mem[a].y, x2: mem[b].x, y2: mem[b].y }));
+        }
+        for (const c of mem) g.append(sv('circle', { cx: c.x, cy: c.y, r: radiusFor(curDeg.get(c.id)) + 26 }));
+        gIsl.append(g);
+        // Name über jeder Teilinsel
+        const comps = new Map();
+        mem.forEach((c, i) => { const k = find(i); if (!comps.has(k)) comps.set(k, []); comps.get(k).push(c); });
+        for (const cs of comps.values()) {
+          const top = cs.reduce((m, c) => Math.min(m, c.y - radiusFor(curDeg.get(c.id))), Infinity);
+          const t = sv('text', { class: 'island-name', 'text-anchor': 'middle', x: cs.reduce((a, c) => a + c.x, 0) / cs.length, y: top - 40 });
+          t.textContent = f.name; paint(t, f.color); gIslN.append(t);
+        }
+      }
+    }
+    const islandsSoon = () => { if (!islandRaf) islandRaf = requestAnimationFrame(() => { islandRaf = 0; drawIslands(); }); };
+    // Hover: Verbindungen eines Kreises hervorheben, Rest abblassen (nur mit Maus)
+    let hovId = null;
+    function setHover(id) {
+      if (hovId === id) return; hovId = id;
+      wrap.classList.toggle('hovering', !!id);
+      const nb = new Set(id ? [id] : []);
+      for (const l of board.links) {
+        const e = linkEls.get(l.id); if (!e) continue;
+        const h = !!id && (l.a === id || l.b === id);
+        e.g.classList.toggle('hov', h); e.lb.classList.toggle('hov', h);
+        if (h) { nb.add(l.a); nb.add(l.b); }
+      }
+      for (const g of gn.children) { g.classList.toggle('hov', nb.has(g.dataset.char)); g.classList.toggle('hover-main', g.dataset.char === id); }
+      cullLabels(); cullNames();
+    }
+    // Detailstufen: nah = alles; mittel = keine Linienbeschriftungen, nur wichtigere Namen; fern = nur die wichtigsten
+    // Namen (größer). Namen werden beim Herauszoomen mitvergrößert, damit sie lesbar bleiben.
+    // Namen ohne Überlappung (Größe hängt von der Zoomstufe ab): wichtigere zuerst, Ausgewählte haben Vorrang;
+    // ausgeblendete Namen erscheinen beim Darüberfahren
+    let nameRaf = 0;
+    function cullNames() {
+      const sc = parseFloat(wrap.style.getPropertyValue('--name-scale')) || 1;
+      const CELL = 220; const grid = new Map();
+      const items = [];
+      for (const g of gn.children) {
+        const c = byId(g.dataset.char); if (!c) continue;
+        const rk = g.dataset.rank; const picked = g.classList.contains('picked');
+        if (hovId) { // beim Hover: nur die Figur und ihre Verbundenen, die Figur selbst zuerst
+          if (!g.classList.contains('hov')) { g.classList.add('name-off'); continue; }
+          items.push({ g, c, p: (c.id === hovId ? 1e7 : 0) + (curDeg.get(c.id) || 0) * 10 }); continue;
+        }
+        const lodOff = (lod === 'mid' && rk === 'c') || (lod === 'far' && rk !== 'a');
+        if (g.classList.contains('dim') || (lodOff && !picked)) { g.classList.remove('name-off'); continue; }
+        items.push({ g, c, p: (picked ? 1e6 : 0) + (curDeg.get(c.id) || 0) * 10 + (rk === 'a' ? 5 : rk === 'b' ? 2 : 0) });
+      }
+      items.sort((x, y) => y.p - x.p);
+      for (const { g, c } of items) {
+        const w = textUnits(trunc(displayName(c), 26)) * 7.4 * sc; const h = 17 * sc; const r = radiusFor(curDeg.get(c.id));
+        const x0 = c.x - w / 2, x1 = c.x + w / 2, y0 = c.y + r + 4, y1 = y0 + h;
+        const ks = []; for (let gx = Math.floor(x0 / CELL); gx <= Math.floor(x1 / CELL); gx++) for (let gy = Math.floor(y0 / CELL); gy <= Math.floor(y1 / CELL); gy++) ks.push(gx + ',' + gy);
+        const free = !ks.some((k) => (grid.get(k) || []).some((o) => x0 < o[2] && x1 > o[0] && y0 < o[3] && y1 > o[1]));
+        g.classList.toggle('name-off', !free);
+        if (free) for (const k of ks) { if (!grid.has(k)) grid.set(k, []); grid.get(k).push([x0, y0, x1, y1]); }
+      }
+    }
+    const namesSoon = () => { if (!nameRaf) nameRaf = requestAnimationFrame(() => { nameRaf = 0; cullNames(); }); };
+    let lod = '';
+    function setLod(k) {
+      const l = k >= 0.55 ? 'near' : k >= 0.3 ? 'mid' : 'far';
+      if (l !== lod) { lod = l; wrap.dataset.lod = l; if (gn.children.length) namesSoon(); }
+      const sc = l === 'near' ? '1' : Math.min(5, Math.max(1, 10 / (13 * k))).toFixed(2);
+      if (wrap.style.getPropertyValue('--name-scale') !== sc) { wrap.style.setProperty('--name-scale', sc); if (gn.children.length) namesSoon(); }
+    }
     function drawNodes() {
-      gn.replaceChildren(); grads.replaceChildren();
-      const deg = degrees();
-      board.characters.forEach((c, idx) => {
+      gn.replaceChildren(); grads.replaceChildren(); hovId = null; wrap.classList.remove('hovering');
+      const deg = degrees(); curDeg = deg;
+      // Rang für die Detailstufen: a = wichtigste (Top 15 %, mind. 8), b = Top 40 % (mind. 20), c = Rest
+      const ranked = board.characters.slice().sort((x, y) => (deg.get(y.id) || 0) - (deg.get(x.id) || 0));
+      const nA = Math.max(8, Math.ceil(ranked.length * 0.15)), nB = Math.max(20, Math.ceil(ranked.length * 0.4));
+      const rank = new Map(ranked.map((c, i) => [c.id, i < nA ? 'a' : i < nB ? 'b' : 'c']));
+      ranked.slice().reverse().forEach((c, idx) => { // wenig Vernetzte zuerst: Wichtige (und ihre Namen) liegen oben
         const r = radiusFor(deg.get(c.id));
         const cols = colorsOf(c);
         const g = sv('g', { class: 'node' + (first === c.id ? ' selected' : '') + (c.dead ? ' dead' : ''), transform: `translate(${c.x},${c.y})`, tabindex: 0, role: 'button', 'aria-label': displayName(c) });
-        g.dataset.char = c.id;
+        g.dataset.char = c.id; g.dataset.rank = rank.get(c.id);
         paint(g, cols[0] || null);
         g.append(sv('circle', { class: 'halo', r: r + 9 }), sv('circle', { class: 'node-bg', r }));
         const src = safeSrc(c.image);
@@ -1594,7 +1864,7 @@
             paint(ring, col); g.append(ring);
           });
         } else g.append(sv('circle', { class: 'node-ring', r }));
-        const nm = sv('text', { class: 'node-name', 'text-anchor': 'middle', y: r + 18 }); nm.textContent = trunc(displayName(c), 26);
+        const nm = sv('text', { class: 'node-name', 'text-anchor': 'middle', 'dominant-baseline': 'hanging', y: r + 5 }); nm.textContent = trunc(displayName(c), 26);
         if (cols.length > 1) {
           const gid = 'ng' + idx;
           const lg = sv('linearGradient', { id: gid, x1: '0', y1: '0', x2: '1', y2: '0' });
@@ -1606,6 +1876,7 @@
         }
         g.append(nm); gn.append(g);
       });
+      drawIslands();
       applyFocus();
     }
     function legend() {
@@ -1634,7 +1905,7 @@
       linkForm({ id: uid(), a, b: c.id, short: '', long: '' }, true);
     }
 
-    const pz = new PanZoom(wrap, (t) => { vp.setAttribute('transform', `translate(${t.x},${t.y}) scale(${t.k})`); netT.set(board.id, { ...t }); }, {
+    const pz = new PanZoom(wrap, (t) => { vp.setAttribute('transform', `translate(${t.x},${t.y}) scale(${t.k})`); setLod(t.k); netT.set(board.id, { ...t }); }, {
       min: 0.1, max: 4,
       onDown(e) {
         const n = e.target.closest && e.target.closest('.node');
@@ -1643,9 +1914,10 @@
           if (netMode === 'move' && canEdit()) {
             const s = pz.toWorld(e.clientX, e.clientY); const ox = c.x, oy = c.y;
             return {
-              move(ev) { const p = pz.toWorld(ev.clientX, ev.clientY); c.x = Math.round(ox + p.x - s.x); c.y = Math.round(oy + p.y - s.y); n.setAttribute('transform', `translate(${c.x},${c.y})`); moveLinksOf(c.id); },
+              move(ev) { const p = pz.toWorld(ev.clientX, ev.clientY); c.x = Math.round(ox + p.x - s.x); c.y = Math.round(oy + p.y - s.y); n.setAttribute('transform', `translate(${c.x},${c.y})`); moveLinksOf(c.id); islandsSoon(); },
               up(ev, moved) {
                 if (!moved) { tapChar(c); return; }
+                cullLabels(); cullNames(); drawIslands();
                 persist(async () => mustAffect(await q(sb.from('characters').update({ x: c.x, y: c.y }).eq('id', c.id).select('id')))).catch(() => {});
               },
             };
@@ -1678,8 +1950,46 @@
       pz.set({ x: r.width / 2 - ((minX + maxX) / 2) * k, y: h / 2 - ((minY + maxY) / 2) * k, k });
     }
 
+    // Inseln an/aus (wird im Browser gemerkt), Anordnen + Rückgängig (nur Ersteller)
+    const islBtn = btn([el('span', { text: '🏝' }), el('span', { class: 'lbl', text: ' Inseln' })], () => {
+      islandsOn = !islandsOn; store('cn-islands', islandsOn ? '1' : '0');
+      islBtn.classList.toggle('active', islandsOn); islBtn.setAttribute('aria-pressed', String(islandsOn)); drawIslands();
+    }, 'small islands-btn' + (islandsOn ? ' active' : ''));
+    islBtn.setAttribute('aria-pressed', String(islandsOn)); islBtn.title = 'Fraktionsinseln ein-/ausblenden';
+    async function savePositions(pos) {
+      const todo = board.characters.filter((c) => { const p = pos.get(c.id); return p && (p.x !== c.x || p.y !== c.y); });
+      let i = 0;
+      const worker = async () => {
+        while (i < todo.length) {
+          const c = todo[i++]; const p = pos.get(c.id);
+          mustAffect(await q(sb.from('characters').update({ x: p.x, y: p.y }).eq('id', c.id).select('id')));
+          c.x = p.x; c.y = p.y;
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(6, todo.length) }, worker));
+    }
+    const arrangeBtn = canEdit() && board.characters.length > 1 ? btn([el('span', { text: '✨' }), el('span', { class: 'lbl', text: ' Anordnen' })], () => confirmBox('Alle Charaktere anordnen?',
+      `Alle ${board.characters.length} Charaktere werden nach Fraktionen gruppiert und gleichmäßig neu angeordnet (Charaktere mit mehreren Fraktionen zwischen ihren Gruppen). Mit „↶ Rückgängig“ kannst du die bisherige Anordnung wiederherstellen, solange du die Seite nicht neu lädst.`,
+      'Anordnen', async () => {
+        const prev = new Map(board.characters.map((c) => [c.id, { x: c.x, y: c.y }]));
+        const pos = autoLayout(board.characters, board.links, board.factions);
+        layoutUndo.set(board.id, prev);
+        try { await savePositions(pos); } finally { netT.delete(board.id); renderBoard(); }
+        toast('Angeordnet. „↶ Rückgängig“ stellt die vorherige Anordnung wieder her.');
+      }), 'small arrange-btn') : null;
+    if (arrangeBtn) arrangeBtn.title = 'Alle Charaktere nach Fraktionen anordnen';
+    const undoBtn = canEdit() && layoutUndo.has(board.id) ? btn('↶ Rückgängig', () => busy(undoBtn, async () => {
+      const prev = layoutUndo.get(board.id);
+      try { await savePositions(prev); layoutUndo.delete(board.id); } catch (e) { toast(errMsg(e)); } finally { netT.delete(board.id); renderBoard(); }
+    }), 'small ghost undo-btn') : null;
     main.append(el('div', { class: 'toolbar' }, canEdit() ? modeBtns : null, canEdit() ? btn('🎨 Fraktionen', factionDialog, 'small') : null,
-      focusBtn, clearBtn, el('div', { class: 'spacer' }), zoomButtons(pz, fit)), wrap, hint);
+      focusBtn, clearBtn, islBtn, arrangeBtn, undoBtn, el('div', { class: 'spacer' }), zoomButtons(pz, fit)), wrap, hint);
+    svg.addEventListener('pointerover', (e) => {
+      if (e.pointerType !== 'mouse' || pz.h) return;
+      const n = e.target.closest && e.target.closest('.node');
+      setHover(n ? n.dataset.char : null);
+    });
+    svg.addEventListener('pointerleave', () => setHover(null));
     const lg = legend(); if (lg) { lg.addEventListener('pointerdown', (e) => e.stopPropagation()); wrap.append(lg); legendEl = lg; }
     // Tastatur: Enter / Leertaste auf Kreis oder Linienbeschriftung
     svg.addEventListener('keydown', (e) => {

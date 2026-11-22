@@ -141,8 +141,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .node.dead image { filter: grayscale(1) brightness(.85); }
 .node.dead .initials { fill: var(--muted); }
 .initials { fill: var(--text); font-size: 22px; font-weight: 700; pointer-events: none; }
-.node-name { fill: var(--c, var(--text)); font-size: 13px; font-weight: 600; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
-.link line { stroke: var(--link); stroke-width: 2.5; }
+.node-name { fill: var(--c, var(--text)); font-size: calc(13px * var(--name-scale, 1)); font-weight: 600; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
+.link path { fill: none; stroke: var(--c, var(--link)); stroke-width: 2.5; }
+.link.shared path { stroke-opacity: .7; }
 .link-label { cursor: pointer; }
 .link-label rect { fill: var(--panel-2); stroke: var(--label-line); stroke-width: 1; }
 .link-label text { fill: var(--text); font-size: 12px; pointer-events: none; }
@@ -216,7 +217,7 @@ legend { padding: 0 6px; font-weight: 600; }
   .sidenav { width: 100%; flex-direction: row; border-right: 0; border-top: 1px solid var(--line); padding: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom)); }
   .nav-btn { flex: 1; flex-direction: column; gap: 2px; padding: 6px; font-size: 12px; text-align: center; }
   .nav-btn.active { box-shadow: inset 0 3px 0 var(--accent); }
-  .install-btn .lbl, .share-btn .lbl { display: none; }
+  .install-btn .lbl, .share-btn .lbl, .islands-btn .lbl, .arrange-btn .lbl { display: none; }
   .hide-sm { display: none; }
   .unplaced { width: 160px; }
   .toolbar input[type=search] { min-width: 0; flex: 1; }
@@ -327,7 +328,7 @@ th:focus-visible, tbody tr:focus-visible { outline: 2px solid var(--accent); out
 .node.picked .halo { display: inline; }
 .canvas.focusing .node.dim, .canvas.focusing .link.dim, .canvas.focusing .link-label.dim { opacity: .08; }
 .canvas.focusing .link-label.dim { pointer-events: none; }
-.link.hl line { stroke: var(--accent); stroke-width: 4; }
+.link.hl path { stroke: var(--c, var(--accent)); stroke-opacity: 1; stroke-width: 4; }
 .link-label.hl rect { stroke: var(--accent); stroke-width: 1.5; }
 button.legend-item { background: none; border: 0; padding: 2px 6px; margin: 0 -6px; border-radius: 6px; cursor: pointer; font: inherit; font-weight: 600; text-align: left; }
 button.legend-item:hover { background: var(--panel-2); }
@@ -357,3 +358,25 @@ button.legend-item[aria-pressed=true] { background: var(--panel-2); box-shadow: 
   .canvas.panel-open + .hint { display: none; }
   .focus-list { max-height: 130px; }
 }
+
+/* Fraktionsinseln: zarte Flächen hinter Charakteren mit genau einer Fraktion */
+.island { opacity: .13; pointer-events: none; }
+:root[data-theme=light] .island { opacity: .16; }
+.island circle { fill: var(--c); }
+.island line { stroke: var(--c); stroke-width: 76; stroke-linecap: round; }
+.island-name { fill: var(--c); font-size: 30px; font-weight: 800; opacity: .45; pointer-events: none; paint-order: stroke; stroke: var(--bg); stroke-width: 6px; stroke-linejoin: round; }
+.canvas.focusing .islands, .canvas.focusing .island-names { opacity: .35; }
+/* Linienbeschriftungen: überlappende ausgeblendet (sichtbar bei Hover/Fokus) */
+.link-label.culled:not(:focus-visible) { opacity: 0; pointer-events: none; }
+/* Hover: Verbindungen eines Kreises hervorheben, Rest abblassen */
+.canvas.hovering .node:not(.hov):not(.dim) { opacity: .3; }
+.canvas.hovering .link:not(.hov):not(.dim), .canvas.hovering .link-label:not(.hov):not(.dim):not(.culled) { opacity: .12; }
+.link.hov path { stroke: var(--c, var(--accent)); stroke-opacity: 1; stroke-width: 4; }
+.link-label.hov:not(.culled) { opacity: 1; pointer-events: auto; }
+.link-label.hov rect { stroke: var(--accent); }
+/* Detailstufen beim Zoomen */
+.canvas[data-lod=mid] .link-label:not(.hov):not(:focus-visible), .canvas[data-lod=far] .link-label:not(.hov):not(:focus-visible) { opacity: 0; pointer-events: none; }
+.canvas[data-lod=mid] .node[data-rank=c]:not(.hov):not(.picked) .node-name { opacity: 0; }
+.canvas[data-lod=far] .node:not([data-rank=a]):not(.hov):not(.picked) .node-name { opacity: 0; }
+.canvas[data-lod=far] .initials { opacity: 0; }
+.node.name-off:not(.hover-main) .node-name { opacity: 0; }
