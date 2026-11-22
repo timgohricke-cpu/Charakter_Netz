@@ -215,7 +215,7 @@ legend { padding: 0 6px; font-weight: 600; }
   .sidenav { width: 100%; flex-direction: row; border-right: 0; border-top: 1px solid var(--line); padding: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom)); }
   .nav-btn { flex: 1; flex-direction: column; gap: 2px; padding: 6px; font-size: 12px; text-align: center; }
   .nav-btn.active { box-shadow: inset 0 3px 0 var(--accent); }
-  .install-btn .lbl { display: none; }
+  .install-btn .lbl, .share-btn .lbl { display: none; }
   .hide-sm { display: none; }
   .unplaced { width: 160px; }
   .toolbar input[type=search] { min-width: 0; flex: 1; }

@@ -866,7 +866,7 @@
         el('h1', { class: 'board-title', text: board.name }),
         canEdit() ? null : el('span', { class: 'badge', title: 'Du kannst dieses Board nur ansehen.', text: '👁 Nur ansehen' + (board.ownerName ? ' · von ' + board.ownerName : '') }),
         el('div', { class: 'spacer' }),
-        canEdit() ? btn('🔗 Link teilen', () => shareDialog(board.id, board.name), 'small primary') : null,
+        canEdit() ? el('button', { class: 'btn small primary share-btn', type: 'button', title: 'Link teilen', onclick: () => shareDialog(board.id, board.name) }, '🔗', el('span', { class: 'lbl', text: ' Link teilen' })) : null,
         themeButton(), installButton()),
       el('div', { class: 'board-layout' }, nav, main));
     if (view === 'tabelle') renderTable(main);
@@ -970,7 +970,7 @@
       active = 0;
       list.replaceChildren(...items.map((it, i) => {
         const li = it.create
-          ? el('li', { role: 'option', class: 'new' }, el('span', { text: '+ Neue Fraktion „' }), el('strong', { text: it.create }), el('span', { text: '“ anlegen' }))
+          ? el('li', { role: 'option', class: 'new' }, el('span', { text: `+ Neue Fraktion „${it.create}“ anlegen` }))
           : paint(el('li', { role: 'option' }, el('span', { class: 'dot' }), el('span', { text: it.name })), it.color);
         li.classList.toggle('active', i === active);
         li.addEventListener('pointerdown', (e) => { e.preventDefault(); pick(it); });
