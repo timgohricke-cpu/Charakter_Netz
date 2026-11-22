@@ -16,7 +16,7 @@
   const USERNAME_RE = /^[A-Za-z0-9_.-]{3,24}$/;
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const BOARD_COLS = 'id,owner_id,name,map_path,map_w,map_h,created_at,updated_at';
-  const CHAR_COLS = 'id,name,short,info,place,image_path,x,y,map_x,map_y,faction_id,dead';
+  const CHAR_COLS = 'id,name,short,info,place,image_path,x,y,map_x,map_y,dead';
   const FACTION_COLS = 'id,name,color';
   const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
   const DEAD_COLOR = '#8b9099';
@@ -227,10 +227,12 @@
     const r = await q(sb.from('boards').delete().eq('id', bid).select('id'));
     if (!r.length) throw denied();
   }
-  async function fetchAll(table, cols, bid) {
+  async function fetchAll(table, cols, bid, order = ['id']) {
     const out = [];
     for (let from = 0; ; from += 1000) {
-      const data = await q(sb.from(table).select(cols).eq('board_id', bid).order('id').range(from, from + 999));
+      let qy = sb.from(table).select(cols).eq('board_id', bid);
+      for (const o of order) qy = qy.order(o);
+      const data = await q(qy.range(from, from + 999));
       out.push(...data);
       if (data.length < 1000) return out;
     }
@@ -239,21 +241,22 @@
     id: c.id, board_id: bid, name: c.name, short: c.short || '', info: c.info || '', place: c.place || '',
     image_path: c.imagePath || null, x: c.x, y: c.y,
     map_x: c.mapPos ? c.mapPos.x : null, map_y: c.mapPos ? c.mapPos.y : null,
-    faction_id: c.factionId || null, dead: !!c.dead,
+    dead: !!c.dead,
   });
   const charFromRow = (r) => ({
     id: r.id, name: r.name, short: r.short, info: r.info, place: r.place, imagePath: r.image_path, image: null,
     x: r.x, y: r.y, mapPos: r.map_x != null && r.map_y != null ? { x: r.map_x, y: r.map_y } : null,
-    factionId: r.faction_id || null, dead: !!r.dead,
+    factionIds: [], dead: !!r.dead,
   });
 
   // Ein Board komplett vom Server laden (optional mit Bildadressen)
   async function loadBoard(bid, withUrls = true) {
-    const [b, chars, links, factions] = await Promise.all([
+    const [b, chars, links, factions, cf] = await Promise.all([
       q(sb.from('boards').select(BOARD_COLS).eq('id', bid).maybeSingle()),
       fetchAll('characters', CHAR_COLS, bid),
       fetchAll('links', LINK_COLS, bid),
       fetchAll('factions', FACTION_COLS, bid),
+      fetchAll('character_factions', 'character_id,faction_id,position', bid, ['character_id', 'faction_id']),
     ]);
     if (!b) return null;
     const out = {
@@ -263,6 +266,9 @@
       links: links.map((l) => ({ id: l.id, a: l.a, b: l.b, short: l.short, long: l.long })),
       factions: factions.filter((f) => COLOR_RE.test(f.color)).sort((x, y) => x.name.localeCompare(y.name, 'de')),
     };
+    const cmap = new Map(out.characters.map((c) => [c.id, c]));
+    cf.sort((x, y) => x.position - y.position);
+    for (const r of cf) { const c = cmap.get(r.character_id); if (c && out.factions.some((f) => f.id === r.faction_id)) c.factionIds.push(r.faction_id); }
     if (withUrls) {
       const get = await signUrls([out.map && out.map.path, ...out.characters.map((c) => c.imagePath)]);
       if (out.map) out.map.src = get(out.map.path);
@@ -312,14 +318,27 @@
   const byId = (id) => board.characters.find((c) => c.id === id);
   const byLink = (id) => board.links.find((l) => l.id === id);
   const byFaction = (id) => (id ? board.factions.find((f) => f.id === id) : null);
-  const newChar = (x, y) => ({ id: uid(), name: '', short: '', info: '', image: null, imagePath: null, place: '', x, y, mapPos: null, factionId: null, dead: false });
-  // Farbe eines Charakters: grau wenn verstorben, sonst Fraktionsfarbe (oder keine)
-  function colorOf(c) {
-    if (c.dead) return DEAD_COLOR;
-    const f = byFaction(c.factionId);
-    return f && COLOR_RE.test(f.color) ? f.color : null;
+  const newChar = (x, y) => ({ id: uid(), name: '', short: '', info: '', image: null, imagePath: null, place: '', x, y, mapPos: null, factionIds: [], dead: false });
+  const factionsOf = (c) => (c.factionIds || []).map(byFaction).filter(Boolean);
+  // Farben eines Charakters: grau wenn verstorben, sonst die Farben seiner Fraktionen (keine = neutral)
+  function colorsOf(c) {
+    if (c.dead) return [DEAD_COLOR];
+    return factionsOf(c).map((f) => f.color).filter((x) => COLOR_RE.test(x));
   }
   const paint = (node, color) => { if (color) node.style.setProperty('--c', color); else node.style.removeProperty('--c'); return node; };
+  // Mehrere Farben: harte Farbabschnitte für Text (waagerecht) und Rand (rundherum)
+  const stops = (cols) => cols.map((c, i) => `${c} ${(i * 100 / cols.length).toFixed(2)}% ${((i + 1) * 100 / cols.length).toFixed(2)}%`).join(', ');
+  function paintMany(node, cols) {
+    paint(node, cols[0] || null);
+    node.classList.toggle('multi', cols.length > 1);
+    if (cols.length > 1) {
+      node.style.setProperty('--grad-h', `linear-gradient(90deg, ${stops(cols)})`);
+      node.style.setProperty('--grad-c', `conic-gradient(${stops(cols)})`);
+    } else { node.style.removeProperty('--grad-h'); node.style.removeProperty('--grad-c'); }
+    return node;
+  }
+  const colorName = (c, cls = 'colored') => paintMany(el('span', { class: cls, text: displayName(c) }), colorsOf(c));
+  const factionTag = (f) => paint(el('span', { class: 'tag' }, el('span', { class: 'dot' }), el('span', { text: f.name })), f.color);
   function degrees() {
     const m = new Map();
     for (const l of board.links) { m.set(l.a, (m.get(l.a) || 0) + 1); m.set(l.b, (m.get(l.b) || 0) + 1); }
@@ -710,7 +729,7 @@
     };
     const map = b.map ? { src: await dl(b.map.path), w: b.map.w, h: b.map.h } : null;
     const characters = [];
-    for (const c of b.characters) characters.push({ id: c.id, name: c.name, short: c.short, info: c.info, image: await dl(c.imagePath), place: c.place, x: c.x, y: c.y, mapPos: c.mapPos, faction: c.factionId, dead: c.dead });
+    for (const c of b.characters) characters.push({ id: c.id, name: c.name, short: c.short, info: c.info, image: await dl(c.imagePath), place: c.place, x: c.x, y: c.y, mapPos: c.mapPos, factions: c.factionIds, dead: c.dead });
     const out = { format: 'charakter-netz', version: 2, id: b.id, name: b.name, created: Date.parse(b.created), updated: Date.parse(b.updated), map: map && map.src ? map : null, factions: b.factions, characters, links: b.links };
     const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
     const a = el('a', { href: URL.createObjectURL(blob), download: (b.name.replace(/[^\w\-äöüÄÖÜß ]+/g, '').trim() || 'board') + '.json' });
@@ -743,7 +762,7 @@
     const characters = o.characters.slice(0, 2000).map((c) => {
       const id = uid(); idMap.set(c && c.id, id);
       const mp = c && c.mapPos && Number.isFinite(c.mapPos.x) && Number.isFinite(c.mapPos.y) ? { x: clamp(c.mapPos.x, 0, 1), y: clamp(c.mapPos.y, 0, 1) } : null;
-      return { id, name: str(c && c.name, 100).trim() || 'Unbenannt', short: str(c && c.short, 300), info: str(c && c.info, 20000), image: img(c && c.image), place: str(c && c.place, 2000), x: Math.round(num(c && c.x)), y: Math.round(num(c && c.y)), mapPos: mp, factionId: (c && fMap.get(c.faction)) || null, dead: !!(c && c.dead === true) };
+      return { id, name: str(c && c.name, 100).trim() || 'Unbenannt', short: str(c && c.short, 300), info: str(c && c.info, 20000), image: img(c && c.image), place: str(c && c.place, 2000), x: Math.round(num(c && c.x)), y: Math.round(num(c && c.y)), mapPos: mp, factionIds: [...new Set((c && Array.isArray(c.factions) ? c.factions : (c && c.faction ? [c.faction] : [])).map((x) => fMap.get(x)).filter(Boolean))].slice(0, 10), dead: !!(c && c.dead === true) };
     });
     const seen = new Set();
     const links = (Array.isArray(o.links) ? o.links : []).slice(0, 10000)
@@ -781,6 +800,8 @@
       };
       await Promise.all([worker(), worker(), worker(), worker()]);
       for (const part of chunks(rows, 500)) await q(sb.from('characters').insert(part));
+      const cfRows = o.characters.flatMap((c) => (c.factionIds || []).map((fid, i) => ({ board_id: bid, character_id: c.id, faction_id: fid, position: i })));
+      for (const part of chunks(cfRows, 1000)) await q(sb.from('character_factions').insert(part));
       const lrows = o.links.map((l) => ({ id: l.id, board_id: bid, a: l.a, b: l.b, short: l.short, long: l.long }));
       for (const part of chunks(lrows, 1000)) await q(sb.from('links').insert(part));
       return bid;
@@ -862,7 +883,7 @@
     if (!canEdit()) return;
     let changed = false;
     const list = el('div', { class: 'faction-list' });
-    const count = (fid) => board.characters.filter((c) => c.factionId === fid).length;
+    const count = (fid) => board.characters.filter((c) => (c.factionIds || []).includes(fid)).length;
     const save = async (f, patch) => {
       try {
         mustAffect(await q(sb.from('factions').update(patch).eq('id', f.id).select('id')));
@@ -881,7 +902,7 @@
           busy(del, async () => {
             try { mustAffect(await q(sb.from('factions').delete().eq('id', f.id).select('id'))); } catch (e) { toast(errMsg(e)); return; }
             board.factions = board.factions.filter((x) => x.id !== f.id);
-            board.characters.forEach((c) => { if (c.factionId === f.id) c.factionId = null; });
+            board.characters.forEach((c) => { c.factionIds = (c.factionIds || []).filter((x) => x !== f.id); });
             changed = true; draw();
           });
         }, 'ghost small danger');
@@ -911,6 +932,70 @@
     box.parentElement._onClose = () => { if (changed) renderBoard(); };
   }
 
+  // ---------- Fraktions-Auswahl mit Vorschlägen ----------
+  function nextFactionColor(extra = []) {
+    const used = new Set([...board.factions, ...extra].map((f) => f.color.toLowerCase()));
+    return FACTION_PALETTE.find((c) => !used.has(c)) || FACTION_PALETTE[(board.factions.length + extra.length) % FACTION_PALETTE.length];
+  }
+  function factionPicker(sel, onChange) {
+    const pending = sel.filter((f) => f.isNew);
+    const pool = () => [...board.factions, ...pending];
+    const chips = el('div', { class: 'chips' });
+    const input = el('input', { type: 'text', class: 'chip-input', maxlength: 60, autocomplete: 'off', spellcheck: 'false', placeholder: 'Fraktion hinzufügen …', role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false' });
+    const list = el('ul', { class: 'suggest', role: 'listbox', hidden: true });
+    const wrapEl = el('div', { class: 'picker' }, chips, list);
+    let items = []; let active = 0;
+    const changed = () => { drawChips(); onChange(); };
+    function drawChips() {
+      chips.replaceChildren(...sel.map((f) => paint(el('span', { class: 'chip' }, el('span', { class: 'dot' }), el('span', { text: f.name }),
+        el('button', { type: 'button', class: 'chip-x', 'aria-label': f.name + ' entfernen', onclick: () => { sel.splice(sel.indexOf(f), 1); changed(); input.focus(); } }, '×')), f.color)), input);
+      input.placeholder = sel.length ? '' : 'Fraktion hinzufügen …';
+    }
+    function pick(it) {
+      if (sel.length >= 10) { toast('Höchstens 10 Fraktionen pro Charakter.'); return; }
+      if (it.create) {
+        const name = it.create.slice(0, 60);
+        const f = { id: uid(), name, color: nextFactionColor(pending), isNew: true };
+        pending.push(f); sel.push(f);
+      } else if (!sel.includes(it)) sel.push(it);
+      input.value = ''; changed(); suggest(); input.focus();
+    }
+    function suggest() {
+      const v = input.value.trim(); const lv = v.toLowerCase();
+      items = pool().filter((f) => !sel.includes(f) && (!lv || f.name.toLowerCase().includes(lv)))
+        .sort((x, y) => (x.name.toLowerCase().startsWith(lv) ? 0 : 1) - (y.name.toLowerCase().startsWith(lv) ? 0 : 1) || x.name.localeCompare(y.name, 'de')).slice(0, 8);
+      const exact = pool().find((f) => f.name.toLowerCase() === lv);
+      if (v && !exact) items.push({ create: v });
+      if (exact && !sel.includes(exact) && !items.includes(exact)) items.unshift(exact);
+      active = 0;
+      list.replaceChildren(...items.map((it, i) => {
+        const li = it.create
+          ? el('li', { role: 'option', class: 'new' }, el('span', { text: '+ Neue Fraktion „' }), el('strong', { text: it.create }), el('span', { text: '“ anlegen' }))
+          : paint(el('li', { role: 'option' }, el('span', { class: 'dot' }), el('span', { text: it.name })), it.color);
+        li.classList.toggle('active', i === active);
+        li.addEventListener('pointerdown', (e) => { e.preventDefault(); pick(it); });
+        return li;
+      }));
+      if (!items.length) list.append(el('li', { class: 'muted empty-opt', text: pool().length ? 'Alle Fraktionen sind schon ausgewählt.' : 'Noch keine Fraktionen – tippe einen Namen ein.' }));
+      list.hidden = false; input.setAttribute('aria-expanded', 'true');
+    }
+    const hide = () => { list.hidden = true; input.setAttribute('aria-expanded', 'false'); };
+    const mark = () => [...list.children].forEach((li, i) => li.classList.toggle('active', i === active));
+    input.addEventListener('focus', suggest);
+    input.addEventListener('input', suggest);
+    input.addEventListener('blur', () => setTimeout(hide, 120));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' && items.length) { e.preventDefault(); active = (active + 1) % items.length; mark(); }
+      else if (e.key === 'ArrowUp' && items.length) { e.preventDefault(); active = (active - 1 + items.length) % items.length; mark(); }
+      else if (e.key === 'Enter' || e.key === ',') { if (items[active]) { e.preventDefault(); pick(items[active]); } }
+      else if (e.key === 'Backspace' && !input.value && sel.length) { sel.pop(); changed(); suggest(); }
+      else if (e.key === 'Escape' && !list.hidden) { e.stopPropagation(); hide(); }
+    });
+    chips.addEventListener('click', (e) => { if (e.target === chips) input.focus(); });
+    drawChips();
+    return wrapEl;
+  }
+
   // ---------- Charakter: Erstellen / Bearbeiten ----------
   function charForm(src, isNew) {
     if (!canEdit()) return;
@@ -921,17 +1006,16 @@
     info.value = d.info;
     const place = el('textarea', { rows: 2, maxlength: 2000, placeholder: 'z. B. Lebt in der Hafenstadt Velmar' });
     place.value = d.place;
-    const faction = el('select', { 'aria-label': 'Fraktion' },
-      el('option', { value: '', text: '– keine Fraktion –' }),
-      board.factions.map((f) => el('option', { value: f.id, text: f.name })));
-    faction.value = byFaction(d.factionId) ? d.factionId : '';
+    // Fraktionen: ausgewählte Liste (bestehende + im Formular neu angelegte) bleibt auch beim Platzieren auf der Karte erhalten
+    if (!d._fsel) d._fsel = (d.factionIds || []).map(byFaction).filter(Boolean);
     const dead = el('input', { type: 'checkbox', checked: !!d.dead });
     const preview = el('div', { class: 'avatar big' });
     const setPrev = () => {
       preview.replaceChildren(avatarContent({ ...d, name: name.value || d.name }));
-      paint(preview, colorOf({ dead: dead.checked, factionId: faction.value || null }));
+      paintMany(preview, dead.checked ? [DEAD_COLOR] : d._fsel.map((f) => f.color));
     };
-    faction.addEventListener('change', setPrev); dead.addEventListener('change', setPrev);
+    const picker = factionPicker(d._fsel, setPrev);
+    dead.addEventListener('change', setPrev);
     const rmImg = btn('Bild entfernen', () => { d.image = null; d._blob = null; d._rm = true; setPrev(); rmImg.hidden = true; }, 'ghost small danger');
     rmImg.hidden = !d.image;
     const file = el('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onchange: async () => {
@@ -939,7 +1023,7 @@
     } });
     name.addEventListener('input', () => { if (!d.image) setPrev(); });
     setPrev();
-    const collect = () => { d.name = name.value.trim(); d.short = short.value.trim(); d.info = info.value; d.place = place.value; d.factionId = faction.value || null; d.dead = dead.checked; };
+    const collect = () => { d.name = name.value.trim(); d.short = short.value.trim(); d.info = info.value; d.place = place.value; d.dead = dead.checked; };
     const mapState = el('span', { class: 'muted' });
     const rmPos = btn('Entfernen', () => { d.mapPos = null; updMap(); }, 'ghost small danger');
     const setPos = btn('Auf Weltkarte setzen', () => {
@@ -954,10 +1038,9 @@
       el('div', { class: 'form-img' }, preview, el('div', { class: 'col' }, el('label', { class: 'btn small' }, 'Bild wählen', file), rmImg)),
       field('Name', name),
       field('Kurzbeschreibung', short),
-      el('div', { class: 'row2' },
-        field('Fraktion', faction),
-        el('label', { class: 'check dead-check' }, dead, el('span', { text: 'Verstorben (wird grau dargestellt)' }))),
-      board.factions.length ? null : el('small', { class: 'muted', text: 'Tipp: Fraktionen mit eigenen Farben legst du im Charakternetz über „🎨 Fraktionen“ an.' }),
+      el('div', { class: 'field' }, el('span', { text: 'Fraktionen (optional, auch mehrere)' }), picker),
+      el('small', { class: 'muted', text: 'Tippen, um bestehende Fraktionen vorzuschlagen, oder einen neuen Namen eingeben und Enter drücken. Farben änderst du über „🎨 Fraktionen“.' }),
+      el('label', { class: 'check' }, dead, el('span', { text: 'Verstorben (Rand und Name werden grau)' })),
       field('Infos', info),
       el('fieldset', {}, el('legend', { text: 'Standort' }),
         field('Standort-Beschreibung', place),
@@ -970,11 +1053,24 @@
         const oldPath = old ? old.imagePath : null;
         let path = d.imagePath || null; let uploaded = null;
         try {
+          // Im Formular neu angelegte Fraktionen zuerst speichern
+          const chosen = d._fsel.slice(0, 10);
+          const fresh = chosen.filter((f) => f.isNew);
+          if (fresh.length) {
+            await q(sb.from('factions').insert(fresh.map((f) => ({ id: f.id, board_id: board.id, name: f.name, color: f.color }))));
+            for (const f of fresh) { delete f.isNew; if (!byFaction(f.id)) board.factions.push(f); }
+            board.factions.sort((x, y) => x.name.localeCompare(y.name, 'de'));
+          }
           if (d._blob) { uploaded = await uploadImage(board.id, d._blob, 'p-'); path = uploaded; } else if (d._rm) path = null;
-          const rec = { id: d.id, name: d.name, short: d.short, info: d.info, place: d.place, imagePath: path, image: path ? d.image : null, x: d.x, y: d.y, mapPos: d.mapPos, factionId: byFaction(d.factionId) ? d.factionId : null, dead: !!d.dead };
+          const rec = { id: d.id, name: d.name, short: d.short, info: d.info, place: d.place, imagePath: path, image: path ? d.image : null, x: d.x, y: d.y, mapPos: d.mapPos, factionIds: chosen.map((f) => f.id), dead: !!d.dead };
           const row = charRow(rec, board.id);
           if (isNew) await q(sb.from('characters').insert(row));
           else { const { id, board_id: _b, ...rest } = row; mustAffect(await q(sb.from('characters').update(rest).eq('id', id).select('id'))); }
+          const prevIds = old ? (old.factionIds || []) : [];
+          if (prevIds.join() !== rec.factionIds.join()) {
+            if (!isNew) await q(sb.from('character_factions').delete().eq('character_id', rec.id));
+            if (rec.factionIds.length) await q(sb.from('character_factions').insert(rec.factionIds.map((fid, pos) => ({ board_id: board.id, character_id: rec.id, faction_id: fid, position: pos }))));
+          }
           if (oldPath && oldPath !== path) removeImages([oldPath]);
           const i = board.characters.findIndex((c) => c.id === rec.id);
           if (i >= 0) board.characters[i] = rec; else board.characters.push(rec);
@@ -994,10 +1090,10 @@
     if (!c) return;
     const links = board.links.filter((l) => l.a === id || l.b === id);
     const body = el('div', { class: 'info' },
-      el('div', { class: 'info-head' }, paint(el('div', { class: 'avatar big' }, avatarContent(c)), colorOf(c)),
-        el('div', {}, paint(el('h3', { class: 'colored', text: displayName(c) }), colorOf(c)), c.short ? el('p', { class: 'lead', text: c.short }) : null,
+      el('div', { class: 'info-head' }, paintMany(el('div', { class: 'avatar big' }, avatarContent(c)), colorsOf(c)),
+        el('div', {}, el('h3', {}, colorName(c)), c.short ? el('p', { class: 'lead', text: c.short }) : null,
           el('div', { class: 'row tags' },
-            byFaction(c.factionId) ? paint(el('span', { class: 'tag' }, el('span', { class: 'dot' }), el('span', { text: byFaction(c.factionId).name })), byFaction(c.factionId).color) : null,
+            factionsOf(c).map(factionTag),
             c.dead ? paint(el('span', { class: 'tag' }, el('span', { class: 'dot' }), el('span', { text: 'Verstorben' })), DEAD_COLOR) : null))),
       c.info ? section('Infos', el('p', { class: 'pre', text: c.info })) : null,
       (c.place || c.mapPos) ? section('Standort',
@@ -1135,6 +1231,7 @@
     const wrap = el('div', { class: 'canvas grid' });
     const svg = sv('svg', { class: 'net', role: 'img', 'aria-label': 'Charakternetz' });
     const defs = sv('defs'); const cp = sv('clipPath', { id: 'clipc', clipPathUnits: 'objectBoundingBox' }); cp.append(sv('circle', { cx: 0.5, cy: 0.5, r: 0.5 })); defs.append(cp);
+    const grads = sv('g'); defs.append(grads); // Farbverläufe für Namen mit mehreren Fraktionen
     const vp = sv('g'); const gl = sv('g'); const gn = sv('g'); const glb = sv('g'); // Beschriftungen über den Kreisen
     const rubber = sv('line', { class: 'rubber' }); rubber.style.display = 'none';
     vp.append(gl, rubber, gn, glb); svg.append(defs, vp); wrap.append(svg);
@@ -1175,13 +1272,14 @@
       }
     }
     function drawNodes() {
-      gn.replaceChildren();
+      gn.replaceChildren(); grads.replaceChildren();
       const deg = degrees();
-      for (const c of board.characters) {
+      board.characters.forEach((c, idx) => {
         const r = radiusFor(deg.get(c.id));
+        const cols = colorsOf(c);
         const g = sv('g', { class: 'node' + (first === c.id ? ' selected' : '') + (c.dead ? ' dead' : ''), transform: `translate(${c.x},${c.y})` });
         g.dataset.char = c.id;
-        paint(g, colorOf(c));
+        paint(g, cols[0] || null);
         g.append(sv('circle', { class: 'node-bg', r }));
         const src = safeSrc(c.image);
         if (src) {
@@ -1193,13 +1291,29 @@
           t.style.fontSize = Math.round(r * 0.6) + 'px';
           g.append(t);
         }
-        g.append(sv('circle', { class: 'node-ring', r }));
+        if (cols.length > 1) {
+          // Rand in gleich große Farbabschnitte teilen (oben beginnend)
+          const circ = 2 * Math.PI * r, seg = circ / cols.length;
+          cols.forEach((col, i) => {
+            const ring = sv('circle', { class: 'node-ring', r, transform: 'rotate(-90)', 'stroke-dasharray': `${seg} ${circ - seg}`, 'stroke-dashoffset': String(-i * seg) });
+            paint(ring, col); g.append(ring);
+          });
+        } else g.append(sv('circle', { class: 'node-ring', r }));
         const nm = sv('text', { class: 'node-name', 'text-anchor': 'middle', y: r + 18 }); nm.textContent = trunc(displayName(c), 26);
+        if (cols.length > 1) {
+          const gid = 'ng' + idx;
+          const lg = sv('linearGradient', { id: gid, x1: '0', y1: '0', x2: '1', y2: '0' });
+          cols.forEach((col, i) => {
+            lg.append(sv('stop', { offset: String(i / cols.length), 'stop-color': col }), sv('stop', { offset: String((i + 1) / cols.length), 'stop-color': col }));
+          });
+          grads.append(lg);
+          nm.style.fill = `url(#${gid})`;
+        }
         g.append(nm); gn.append(g);
-      }
+      });
     }
     function legend() {
-      const used = board.factions.filter((f) => board.characters.some((c) => c.factionId === f.id && !c.dead));
+      const used = board.factions.filter((f) => board.characters.some((c) => !c.dead && (c.factionIds || []).includes(f.id)));
       const anyDead = board.characters.some((c) => c.dead);
       if (!used.length && !anyDead) return null;
       return el('div', { class: 'legend', 'aria-label': 'Legende' },
@@ -1302,8 +1416,8 @@
     const pins = [];
     for (const c of board.characters) {
       if (!c.mapPos) continue;
-      const p = paint(el('div', { class: 'pin' + (focusChar === c.id ? ' focus' : '') + (c.dead ? ' dead' : ''), role: 'button', tabindex: 0, title: displayName(c), 'aria-label': displayName(c) },
-        el('span', { class: 'pin-dot' }, avatarContent(c)), el('span', { class: 'pin-name', text: displayName(c) })), colorOf(c));
+      const p = el('div', { class: 'pin' + (focusChar === c.id ? ' focus' : '') + (c.dead ? ' dead' : ''), role: 'button', tabindex: 0, title: displayName(c), 'aria-label': displayName(c) },
+        paintMany(el('span', { class: 'pin-dot' }, avatarContent(c)), colorsOf(c)), el('span', { class: 'pin-name' }, colorName(c)));
       p.dataset.char = c.id;
       p.style.left = c.mapPos.x * M.w + 'px'; p.style.top = c.mapPos.y * M.h + 'px';
       p.addEventListener('keydown', (e) => { if (e.key === 'Enter') charInfo(c.id); });
@@ -1383,18 +1497,18 @@
     for (const l of board.links) { linkCount.set(l.a, (linkCount.get(l.a) || 0) + 1); linkCount.set(l.b, (linkCount.get(l.b) || 0) + 1); }
     const cols = [['bild', '', 'narrow'], ['name', 'Name', ''], ['faction', 'Fraktion', ''], ['short', 'Kurzbeschreibung', 'hide-sm'], ['place', 'Standort', 'hide-sm'], ['links', 'Verbindungen', 'hide-sm'], ['map', 'Karte', 'narrow hide-sm']];
     const val = (c, k) => (k === 'links' ? linkCount.get(c.id) || 0 : k === 'map' ? (c.mapPos ? 1 : 0)
-      : k === 'faction' ? (c.dead ? '~' : '') + ((byFaction(c.factionId) || {}).name || '\uffff').toLowerCase() : (c[k] || '').toLowerCase());
+      : k === 'faction' ? (factionsOf(c).map((f) => f.name).join(', ') || '\uffff').toLowerCase() : (c[k] || '').toLowerCase());
     function fill() {
       const qy = tableFilter.trim().toLowerCase();
       const rows = board.characters
-        .filter((c) => !qy || [c.name, c.short, c.place, c.info, (byFaction(c.factionId) || {}).name, c.dead ? 'verstorben tot' : ''].some((s) => (s || '').toLowerCase().includes(qy)))
+        .filter((c) => !qy || [c.name, c.short, c.place, c.info, ...factionsOf(c).map((f) => f.name), c.dead ? 'verstorben tot' : ''].some((s) => (s || '').toLowerCase().includes(qy)))
         .sort((a, b) => { const x = val(a, tableSort.key), y = val(b, tableSort.key); return (x < y ? -1 : x > y ? 1 : 0) * tableSort.dir; });
       tbody.replaceChildren(...rows.map((c) => {
-        const f = byFaction(c.factionId);
+        const fs = factionsOf(c);
         const tr = el('tr', { tabindex: 0, onclick: () => charInfo(c.id) },
-          el('td', { class: 'narrow' }, paint(el('div', { class: 'avatar' }, avatarContent(c)), colorOf(c))),
-          el('td', {}, paint(el('strong', { class: 'colored', text: displayName(c) }), colorOf(c))),
-          el('td', {}, f ? paint(el('span', { class: 'tag' }, el('span', { class: 'dot' }), el('span', { text: f.name })), f.color) : el('span', { class: 'muted', text: '–' })),
+          el('td', { class: 'narrow' }, paintMany(el('div', { class: 'avatar' }, avatarContent(c)), colorsOf(c))),
+          el('td', {}, el('strong', {}, colorName(c))),
+          el('td', {}, fs.length ? el('div', { class: 'row tags-inline' }, fs.map(factionTag)) : el('span', { class: 'muted', text: '–' })),
           el('td', { class: 'clip hide-sm', text: c.short }),
           el('td', { class: 'clip hide-sm', text: c.place }),
           el('td', { class: 'hide-sm', text: String(linkCount.get(c.id) || 0) }),
