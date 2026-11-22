@@ -1011,9 +1011,9 @@
     const wrap = el('div', { class: 'canvas grid' });
     const svg = sv('svg', { class: 'net', role: 'img', 'aria-label': 'Charakternetz' });
     const defs = sv('defs'); const cp = sv('clipPath', { id: 'clipc' }); cp.append(sv('circle', { cx: 0, cy: 0, r: R })); defs.append(cp);
-    const vp = sv('g'); const gl = sv('g'); const gn = sv('g');
+    const vp = sv('g'); const gl = sv('g'); const gn = sv('g'); const glb = sv('g'); // Beschriftungen über den Kreisen
     const rubber = sv('line', { class: 'rubber' }); rubber.style.display = 'none';
-    vp.append(gl, rubber, gn); svg.append(defs, vp); wrap.append(svg);
+    vp.append(gl, rubber, gn, glb); svg.append(defs, vp); wrap.append(svg);
     const hint = el('div', { class: 'hint' });
 
     const modes = [['move', '✋ Bewegen'], ['add', '＋ Charakter'], ['link', '🔗 Verbinden']];
@@ -1034,7 +1034,7 @@
     }
 
     function drawLinks() {
-      gl.replaceChildren();
+      gl.replaceChildren(); glb.replaceChildren();
       for (const l of board.links) {
         const a = byId(l.a), b = byId(l.b);
         if (!a || !b) continue;
@@ -1047,7 +1047,7 @@
         lb.append(sv('rect', { x: -w / 2, y: -11, width: w, height: 22, rx: 11 }));
         const t = sv('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }); t.textContent = label;
         const tt = sv('title'); tt.textContent = l.short;
-        lb.append(t, tt); g.append(lb); gl.append(g);
+        lb.append(t, tt); gl.append(g); glb.append(lb);
       }
     }
     function drawNodes() {
