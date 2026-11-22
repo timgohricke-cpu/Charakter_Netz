@@ -1369,8 +1369,9 @@
       const xs = board.characters.map((c) => c.x), ys = board.characters.map((c) => c.y);
       const pad = 52 + 50;
       const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad, minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
-      const k = clamp(Math.min(r.width / (maxX - minX), r.height / (maxY - minY)), 0.1, 1.5);
-      pz.set({ x: r.width / 2 - ((minX + maxX) / 2) * k, y: r.height / 2 - ((minY + maxY) / 2) * k, k });
+      const h = Math.max(120, r.height - 70); // Platz für den Hinweis unten lassen
+      const k = clamp(Math.min(r.width / (maxX - minX), h / (maxY - minY)), 0.1, 1.5);
+      pz.set({ x: r.width / 2 - ((minX + maxX) / 2) * k, y: h / 2 - ((minY + maxY) / 2) * k, k });
     }
 
     main.append(el('div', { class: 'toolbar' }, canEdit() ? modeBtns : null, canEdit() ? btn('🎨 Fraktionen', factionDialog, 'small') : null,
