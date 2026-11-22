@@ -1,4 +1,4 @@
-# Charakter-Netz – Projektstand (Version 2)
+# Charakter-Netz – Projektstand (Version 2.6)
 
 Diese Datei beschreibt den aktuellen Stand, damit die Arbeit in einem neuen Chat nahtlos weitergehen kann.
 **Hier stehen keine Passwörter oder geheimen Schlüssel – und das soll so bleiben (das Repo ist öffentlich).**
@@ -26,7 +26,7 @@ Statische PWA ohne Build-Schritt und ohne externe Bibliotheken zur Laufzeit, geh
 | `config.js` | Supabase-URL, öffentlicher *publishable key*, `EMAIL_DOMAIN` |
 | `app.js` | Gesamte App (ca. 1600 Zeilen, ein IIFE, kein Framework) |
 | `style.css` | Design inkl. Hell-/Dunkelmodus über CSS-Variablen (`:root` / `:root[data-theme=light]`) |
-| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v5`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.5) |
+| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v6`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.6) |
 | `vendor/supabase.js` | `@supabase/supabase-js` 2.119.2, lokal mit esbuild gebündelt (IIFE, global `supabase`) |
 | `supabase/schema.sql` | Komplettes Datenbank-Skript; **idempotent** (kann jederzeit erneut ausgeführt werden) |
 | `manifest.webmanifest`, Icons | Installation als App |
@@ -70,8 +70,9 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 **Update-Hinweis:** erscheint nur, wenn auf dem Server wirklich eine andere `APP_VERSION` liegt.
 **Rechte:** Nur der Ersteller bearbeitet; Besucher sehen alles im Nur-Lesen-Modus (Hinweis „👁 Nur ansehen · von …“). Durchgesetzt per Row Level Security auf dem Server.
 **Charakternetz:** Kreise frei setzen (Modus „＋ Charakter“), ziehen, verbinden (Modus „🔗 Verbinden“), Linienbeschriftung (Kurzbeschreibung) über den Kreisen, Klick → Infokarte bzw. lange Beschreibung; Zoom (Mausrad, Pinch), „Alles zeigen“.
-**Fraktionen:** keine, eine oder mehrere je Charakter; Eingabe mit Vorschlägen und „+ Neue Fraktion anlegen“; Rand und Name in Farbabschnitten; ohne Fraktion neutral (dunkel: weiß); Verwaltung über „🎨 Fraktionen“ (Farbe, Name, Löschen); Legende oben rechts.
-**Verstorben:** Rand + Name grau, „†“ hinter dem Namen, Bild schwarz-weiß.
+**Fraktionen:** keine, eine oder mehrere je Charakter; Eingabe mit Vorschlägen und „+ Neue Fraktion anlegen“; Rand und Name in Farbabschnitten; ohne Fraktion neutral (dunkel: weiß); Verwaltung über „🎨 Fraktionen“ (Farbe, Name, Löschen); Legende oben rechts (Fraktion anklicken = nur ihre Mitglieder zeigen, erneut klicken = aufheben).
+**Verstorben:** behalten ihre Fraktionsfarben, werden aber verblasst/halbdurchsichtig dargestellt (Netz: Deckkraft 0,5; Karte, Tabelle, Infokarte ebenso), „†“ hinter dem Namen, Bild schwarz-weiß. Legende: „Verstorben † (verblasst)“.
+**Auswahl im Netz (seit 2.6):** Knopf „🔍 Auswahl“ (für Ersteller und Besucher) öffnet ein Fenster: Fraktionen (mehrere) und einzelne Charaktere (Liste mit Suche) auswählen, jeweils mit eigenem Schalter „Mit ihren Verbindungen“ (Fraktionen: aus, Charaktere: an), Status „Beide“ (Standard) / „Lebende“ / „Verstorbene“, „Alles zurücksetzen“. Solange das Fenster offen ist, wählt ein Klick auf einen Kreis ihn aus/ab. Abkürzungen: Fraktion in der Legende anklicken; Infokarte „🔍 Im Netz hervorheben“ (Charakter + alle Verbundenen). Darstellung: Ausgewählte mit gestricheltem Leuchtring, ihre Verbindungen dicker in Akzentfarbe, alle nicht Gezeigten nur minimal sichtbar (Deckkraft 0,08), sichtbare Verstorbene moderat (0,5). Der Knopf zeigt „🔍 Auswahl · sichtbar/gesamt“, daneben „✕ Auswahl aufheben“. Die Auswahl gilt je Board und bleibt beim Wechsel der Ansicht, nicht nach Neuladen (`focusStates` in `app.js`).
 **Wichtigkeit:** Kreisradius 32 + 4,5·√(Verbindungen), höchstens 52.
 **Weltkarte:** Kartenbild hochladen, Charaktere platzieren (auch aus „Noch nicht auf der Karte“), Pins in Fraktionsfarben.
 **Tabelle:** Suche (auch nach Fraktion / „verstorben“), Sortierung (auch per Tastatur), Fraktions-Spalte.
@@ -96,7 +97,7 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 
 ## Tests
 **`bash tests/run_all.sh`** – statische Prüfungen, Datenbank (lokales Postgres, frisch + Upgrade + doppelt) und Oberfläche (Chrome headless mit nachgebautem Supabase). Am Ende muss „ALLE TESTS BESTANDEN“ stehen. Details und Live-Prüfliste: `tests/README.md`.
-Stand 22.11.2026: 22 statische + 230 Datenbank- + 78 Oberflächen-Prüfungen, alle bestanden.
+Stand 22.11.2026 (Version 2.6): 22 statische + 230 Datenbank- + 112 Oberflächen-Prüfungen, alle bestanden.
 
 ## Arbeitsweise / Hinweise für Claude
 - Supabase ist aus der Cloud-Arbeitsumgebung von Claude **nicht erreichbar** (Proxy). Getestet wird im **Browser-Fenster der Claude-Desktop-App** auf der Live-Seite oder einer Testkopie (z. B. Unterordner `v2-test/` auf `main`, danach wieder löschen).

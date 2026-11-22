@@ -26,7 +26,7 @@
   const SB_KEY = String(CFG.SUPABASE_KEY || '');
   const EMAIL_DOMAIN = String(CFG.EMAIL_DOMAIN || 'users.charakter-netz.app');
   const BUCKET = 'board-images';
-  const APP_VERSION = '2.5'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
+  const APP_VERSION = '2.6'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
   const CONFIGURED = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(SB_URL) && SB_KEY.length > 20 && !!window.supabase;
   // Benutzernamen: 2–24 Zeichen, Buchstaben/Ziffern . _ - sowie Japanisch (Hiragana, Katakana, Kanji).
   // Muss zu private.cn_username_ok() in supabase/schema.sql passen.
@@ -382,6 +382,13 @@
   let joinedNotice = false;
   const netT = new Map();
   const mapT = new Map();
+  // Auswahl im Charakternetz (je Board, nur in diesem Fenster): Fraktionen, einzelne Charaktere,
+  // jeweils mit/ohne verbundene Charaktere, Status (beide / lebende / verstorbene)
+  const focusStates = new Map();
+  function focusOf(bid) {
+    if (!focusStates.has(bid)) focusStates.set(bid, { factions: new Set(), chars: new Set(), fNb: false, cNb: true, life: 'all', open: false });
+    return focusStates.get(bid);
+  }
 
   // Rechte: Nur der Ersteller darf bearbeiten. Der Server prüft das zusätzlich per Row Level Security.
   const canEdit = () => !!(board && me && board.ownerId === me.id);
@@ -391,9 +398,9 @@
   const byFaction = (id) => (id ? board.factions.find((f) => f.id === id) : null);
   const newChar = (x, y) => ({ id: uid(), name: '', short: '', info: '', image: null, imagePath: null, place: '', x, y, mapPos: null, factionIds: [], dead: false });
   const factionsOf = (c) => (c.factionIds || []).map(byFaction).filter(Boolean);
-  // Farben eines Charakters: grau wenn verstorben, sonst die Farben seiner Fraktionen (keine = neutral)
+  // Farben eines Charakters: die Farben seiner Fraktionen (keine = neutral). Verstorbene behalten ihre Farben
+  // und werden über die Klasse „dead“ verblasst/halbdurchsichtig dargestellt.
   function colorsOf(c) {
-    if (c.dead) return [DEAD_COLOR];
     return factionsOf(c).map((f) => f.color).filter((x) => COLOR_RE.test(x));
   }
   const paint = (node, color) => { if (color) node.style.setProperty('--c', color); else node.style.removeProperty('--c'); return node; };
@@ -408,7 +415,7 @@
     } else { node.style.removeProperty('--grad-h'); node.style.removeProperty('--grad-c'); }
     return node;
   }
-  const colorName = (c, cls = 'colored') => paintMany(el('span', { class: cls, text: displayName(c) }), colorsOf(c));
+  const colorName = (c, cls = 'colored') => paintMany(el('span', { class: cls + (c.dead ? ' is-dead' : ''), text: displayName(c) }), colorsOf(c));
   const factionTag = (f) => paint(el('span', { class: 'tag' }, el('span', { class: 'dot' }), el('span', { text: f.name })), f.color);
   function degrees() {
     const m = new Map();
@@ -1000,8 +1007,9 @@
   }
 
   // ---------- Board ----------
-  function renderBoard() {
-    closeModal();
+  // keepModal: einen inzwischen geöffneten anderen Dialog nicht schließen (z. B. nach langsamem Speichern)
+  function renderBoard(keepModal = false) {
+    if (!keepModal) closeModal();
     const items = [['tabelle', 'Tabelle', '▦'], ['netz', 'Charakternetz', '◉'], ['karte', 'Weltkarte', '◍']];
     const nav = el('nav', { class: 'sidenav', 'aria-label': 'Ansichten' }, items.map(([k, label, ico]) =>
       el('button', { class: 'nav-btn' + (k === view ? ' active' : ''), type: 'button', onclick: () => go(board.id, k), 'aria-current': k === view ? 'page' : null },
@@ -1160,7 +1168,8 @@
     const preview = el('div', { class: 'avatar big' });
     const setPrev = () => {
       preview.replaceChildren(avatarContent({ ...d, name: name.value || d.name }));
-      paintMany(preview, dead.checked ? [DEAD_COLOR] : d._fsel.map((f) => f.color));
+      paintMany(preview, d._fsel.map((f) => f.color));
+      preview.classList.toggle('dead', dead.checked);
     };
     const picker = factionPicker(d._fsel, setPrev);
     dead.addEventListener('change', setPrev);
@@ -1190,7 +1199,7 @@
       field('Kurzbeschreibung', short),
       el('div', { class: 'field' }, el('span', { text: 'Fraktionen (optional, auch mehrere)' }), picker),
       el('small', { class: 'muted', text: 'Tippen, um bestehende Fraktionen vorzuschlagen, oder einen neuen Namen eingeben und Enter drücken. Farben änderst du über „🎨 Fraktionen“.' }),
-      el('label', { class: 'check' }, dead, el('span', { text: 'Verstorben (Rand und Name werden grau)' })),
+      el('label', { class: 'check' }, dead, el('span', { text: 'Verstorben (wird verblasst dargestellt)' })),
       field('Infos', info),
       el('fieldset', {}, el('legend', { text: 'Standort' }),
         field('Standort-Beschreibung', place),
@@ -1224,14 +1233,16 @@
           if (oldPath && oldPath !== path) removeImages([oldPath]);
           const i = board.characters.findIndex((c) => c.id === rec.id);
           if (i >= 0) board.characters[i] = rec; else board.characters.push(rec);
-          renderBoard();
+          // Nur den eigenen Dialog schließen: Wurde er während des Speicherns geschlossen und ein neuer geöffnet,
+          // bleibt der neue offen (sonst gingen dessen Eingaben verloren).
+          renderBoard(currentModal !== formBack);
         } catch (e) {
           if (uploaded) removeImages([uploaded]);
           toast(errMsg(e));
         }
       });
     }, 'primary');
-    modal(isNew ? 'Neuer Charakter' : 'Charakter bearbeiten', body, [btn('Abbrechen', closeModal, 'ghost'), saveBtn]);
+    const formBack = modal(isNew ? 'Neuer Charakter' : 'Charakter bearbeiten', body, [btn('Abbrechen', closeModal, 'ghost'), saveBtn]).parentElement;
   }
 
   // ---------- Charakter: Infokarte ----------
@@ -1240,7 +1251,7 @@
     if (!c) return;
     const links = board.links.filter((l) => l.a === id || l.b === id);
     const body = el('div', { class: 'info' },
-      el('div', { class: 'info-head' }, paintMany(el('div', { class: 'avatar big' }, avatarContent(c)), colorsOf(c)),
+      el('div', { class: 'info-head' }, paintMany(el('div', { class: 'avatar big' + (c.dead ? ' dead' : '') }, avatarContent(c)), colorsOf(c)),
         el('div', {}, el('h3', {}, colorName(c)), c.short ? el('p', { class: 'lead', text: c.short }) : null,
           el('div', { class: 'row tags' },
             factionsOf(c).map(factionTag),
@@ -1250,6 +1261,11 @@
         c.place ? el('p', { class: 'pre', text: c.place }) : null,
         c.mapPos && board.map ? btn('Auf Weltkarte zeigen', () => { focusChar = id; go(board.id, 'karte'); }, 'small') : null) : null,
       section(`Verbindungen (${links.length})`, links.length
+        ? btn('🔍 Im Netz hervorheben', () => {
+          const F = focusOf(board.id); F.chars = new Set([id]); F.factions = new Set(); F.cNb = true;
+          closeModal(); if (view === 'netz') renderBoard(); else go(board.id, 'netz');
+        }, 'small focus-me') : null,
+      links.length
         ? el('ul', { class: 'link-list' }, links.map((l) => {
           const o = byId(l.a === id ? l.b : l.a);
           return el('li', {}, el('button', { class: 'linkbtn', type: 'button', onclick: () => linkInfo(l.id) },
@@ -1287,13 +1303,13 @@
           else mustAffect(await q(sb.from('links').update({ short: d.short, long: d.long }).eq('id', d.id).select('id')));
         } catch (e) { toast(errMsg(e)); return; }
         if (isNew) board.links.push(d); else Object.assign(byLink(l.id), d);
-        renderBoard();
+        renderBoard(currentModal !== formBack);
       });
     }, 'primary');
-    modal(isNew ? 'Neue Verbindung' : 'Verbindung bearbeiten', el('div', { class: 'form' },
+    const formBack = modal(isNew ? 'Neue Verbindung' : 'Verbindung bearbeiten', el('div', { class: 'form' },
       el('p', { class: 'pair' }, el('strong', { text: a.name }), '  ↔  ', el('strong', { text: b.name })),
       field('Kurzbeschreibung (steht auf der Linie)', short),
-      field('Lange Beschreibung', long)), [btn('Abbrechen', closeModal, 'ghost'), saveBtn]);
+      field('Lange Beschreibung', long)), [btn('Abbrechen', closeModal, 'ghost'), saveBtn]).parentElement;
   }
   function linkInfo(id) {
     const l = byLink(id);
@@ -1320,7 +1336,7 @@
       this.t = { x: 0, y: 0, k: 1 }; this.min = o.min ?? 0.1; this.max = o.max ?? 6;
       this.ptr = new Map(); this.h = null; this.pinch = null;
       c.addEventListener('wheel', (e) => {
-        if (e.target.closest && e.target.closest('.legend, .unplaced')) return; // eigene Listen scrollen lassen
+        if (e.target.closest && e.target.closest('.legend, .unplaced, .focus-panel')) return; // eigene Listen scrollen lassen
         e.preventDefault(); this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))); }, { passive: false });
       c.addEventListener('pointerdown', (e) => this.down(e));
       c.addEventListener('pointermove', (e) => this.move(e));
@@ -1389,6 +1405,118 @@
     vp.append(gl, rubber, gn, glb); svg.append(defs, vp); wrap.append(svg);
     const hint = el('div', { class: 'hint' });
 
+    // ---- Auswahl: Wer ist hervorgehoben, wer nur noch minimal sichtbar? ----
+    const F = focusOf(board.id);
+    const focusOn = () => F.factions.size > 0 || F.chars.size > 0 || F.life !== 'all';
+    function computeFocus() {
+      const sel = F.factions.size > 0 || F.chars.size > 0;
+      const inFac = (c) => (c.factionIds || []).some((f) => F.factions.has(f));
+      const picked = new Set(); // ausdrücklich gewählt (Fraktionsmitglied oder einzeln)
+      if (sel) for (const c of board.characters) if (F.chars.has(c.id) || inFac(c)) picked.add(c.id);
+      const vis = new Set(sel ? picked : board.characters.map((c) => c.id));
+      if (sel && (F.fNb || F.cNb)) {
+        for (const l of board.links) {
+          for (const [x, y] of [[l.a, l.b], [l.b, l.a]]) {
+            if (!picked.has(x)) continue;
+            const c = byId(x);
+            if (c && ((F.cNb && F.chars.has(x)) || (F.fNb && inFac(c)))) vis.add(y);
+          }
+        }
+      }
+      if (F.life !== 'all') for (const id of [...vis]) { const c = byId(id); if (!c || c.dead !== (F.life === 'dead')) vis.delete(id); }
+      return { sel, picked, vis };
+    }
+    let countEl = null; let legendEl = null; let charQuery = '';
+    const focusBtn = btn('🔍 Auswahl', () => { F.open = !F.open; renderPanel(); applyFocus(); updHint(); }, 'small focus-btn');
+    const clearBtn = btn('✕ Auswahl aufheben', () => resetFocus(), 'small ghost focus-clear');
+    function resetFocus() { F.factions = new Set(); F.chars = new Set(); F.fNb = false; F.cNb = true; F.life = 'all'; renderPanel(); applyFocus(); }
+    function applyFocus() {
+      const on = focusOn(); const r = computeFocus();
+      wrap.classList.toggle('focusing', on);
+      wrap.classList.toggle('panel-open', F.open);
+      for (const g of gn.children) {
+        const id = g.dataset.char;
+        g.classList.toggle('dim', on && !r.vis.has(id));
+        g.classList.toggle('picked', r.sel && r.picked.has(id) && r.vis.has(id));
+      }
+      for (const l of board.links) {
+        const e = linkEls.get(l.id); if (!e) continue;
+        // Hervorgehoben: beide Enden sichtbar und (bei einer Auswahl) mindestens ein Ende ausgewählt
+        const show = !on || (r.vis.has(l.a) && r.vis.has(l.b) && (!r.sel || r.picked.has(l.a) || r.picked.has(l.b)));
+        for (const x of [e.g, e.lb]) { x.classList.toggle('dim', !show); x.classList.toggle('hl', on && show); }
+        e.lb.setAttribute('tabindex', show ? '0' : '-1');
+      }
+      const shown = on ? r.vis.size : board.characters.length;
+      focusBtn.textContent = on ? `🔍 Auswahl · ${shown}/${board.characters.length}` : '🔍 Auswahl';
+      focusBtn.classList.toggle('active', F.open || on);
+      focusBtn.setAttribute('aria-pressed', String(F.open));
+      clearBtn.hidden = !on;
+      if (countEl) countEl.textContent = `${shown} von ${board.characters.length} sichtbar`;
+      if (legendEl) for (const it of legendEl.querySelectorAll('[data-faction]')) it.setAttribute('aria-pressed', String(F.factions.has(it.dataset.faction)));
+    }
+    const panel = el('div', { class: 'focus-panel', role: 'region', 'aria-label': 'Auswahl' });
+    panel.addEventListener('pointerdown', (e) => e.stopPropagation());
+    const charSearch = el('input', { type: 'search', placeholder: 'Charakter suchen …', 'aria-label': 'Charakter suchen' });
+    charSearch.addEventListener('input', () => { charQuery = charSearch.value; fillCharList(); });
+    const charList = el('div', { class: 'focus-list' });
+    function fillCharList() {
+      const qy = fold(charQuery.trim());
+      const rows = board.characters.filter((c) => !qy || fold(c.name).includes(qy))
+        .sort((a, b) => (F.chars.has(b.id) - F.chars.has(a.id)) || collator.compare(a.name, b.name));
+      charList.replaceChildren(...rows.map((c) => {
+        const cb = el('input', { type: 'checkbox', checked: F.chars.has(c.id) });
+        cb.dataset.char = c.id;
+        cb.addEventListener('change', () => { if (cb.checked) F.chars.add(c.id); else F.chars.delete(c.id); applyFocus(); });
+        return el('label', { class: 'check focus-row' }, cb, colorName(c));
+      }), ...(rows.length ? [] : [el('p', { class: 'muted', text: 'Keine Treffer.' })]));
+    }
+    function renderPanel() {
+      if (!F.open) { panel.remove(); countEl = null; return; }
+      const chip = (f) => {
+        const b = el('button', { type: 'button', class: 'fchip', 'aria-pressed': String(F.factions.has(f.id)), onclick: () => {
+          if (F.factions.has(f.id)) F.factions.delete(f.id); else F.factions.add(f.id);
+          b.setAttribute('aria-pressed', String(F.factions.has(f.id))); applyFocus();
+        } }, el('span', { class: 'dot' }), el('span', { text: f.name }));
+        b.dataset.faction = f.id;
+        return paint(b, f.color);
+      };
+      const nb = (key, label) => {
+        const cb = el('input', { type: 'checkbox', checked: F[key] }); cb.dataset.opt = key;
+        cb.addEventListener('change', () => { F[key] = cb.checked; applyFocus(); });
+        return el('label', { class: 'check' }, cb, el('span', { text: label }));
+      };
+      const lifeOpts = [['all', 'Beide'], ['alive', 'Lebende'], ['dead', 'Verstorbene']];
+      const life = el('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Status' });
+      for (const [v, label] of lifeOpts) {
+        const b = el('button', { type: 'button', role: 'radio', 'aria-checked': String(F.life === v), class: F.life === v ? 'active' : '', onclick: () => {
+          F.life = v;
+          for (const x of life.children) { const a = x === b; x.classList.toggle('active', a); x.setAttribute('aria-checked', String(a)); }
+          applyFocus();
+        } }, label);
+        b.dataset.life = v; life.append(b);
+      }
+      countEl = el('span', { class: 'muted focus-count' });
+      charSearch.value = charQuery; fillCharList();
+      panel.replaceChildren(
+        el('div', { class: 'focus-head' }, el('strong', { text: '🔍 Auswahl' }), countEl,
+          el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Auswahl-Fenster schließen', text: '✕', onclick: () => { F.open = false; renderPanel(); applyFocus(); updHint(); } })),
+        el('h4', { text: 'Fraktionen' }),
+        board.factions.length ? el('div', { class: 'fchips' }, board.factions.map(chip)) : el('p', { class: 'muted', text: 'Noch keine Fraktionen.' }),
+        nb('fNb', 'Mit ihren Verbindungen'),
+        el('h4', { text: 'Einzelne Charaktere' }),
+        charSearch, charList,
+        nb('cNb', 'Mit ihren Verbindungen'),
+        el('h4', { text: 'Status' }), life,
+        el('p', { class: 'muted focus-tip', text: 'Solange dieses Fenster offen ist, wählt ein Klick auf einen Kreis ihn aus oder ab.' }),
+        btn('Alles zurücksetzen', resetFocus, 'small ghost'));
+      if (!panel.isConnected) wrap.append(panel);
+    }
+    // Klick auf einen Kreis: bei offenem Auswahl-Fenster aus-/abwählen, sonst Infokarte
+    function tapChar(c) {
+      if (F.open) { if (F.chars.has(c.id)) F.chars.delete(c.id); else F.chars.add(c.id); fillCharList(); applyFocus(); return; }
+      charInfo(c.id);
+    }
+
     const modes = [['move', '✋ Bewegen'], ['add', '＋ Charakter'], ['link', '🔗 Verbinden']];
     const modeBtns = modes.map(([m, label]) => btn(label, () => setMode(m), 'small' + (netMode === m ? ' active' : '')));
     function setMode(m) {
@@ -1399,6 +1527,7 @@
     }
     function updHint() {
       const touch = matchMedia('(pointer: coarse)').matches;
+      if (F.open && netMode !== 'link') { hint.textContent = (touch ? 'Auswahl: Kreis antippen' : 'Auswahl: Kreis anklicken') + ' = aus- oder abwählen · Hintergrund ziehen: Ansicht bewegen'; return; }
       const txt = canEdit() ? {
         move: board.characters.length ? (touch ? 'Kreise ziehen zum Verschieben · Tippen: Infos · Hintergrund ziehen: Ansicht bewegen · zwei Finger: Zoom' : 'Kreise ziehen zum Verschieben · Klick auf Kreis oder Linie: Infos · Hintergrund ziehen: Ansicht bewegen · Mausrad: Zoom') : 'Wähle „＋ Charakter“ und klicke auf eine freie Stelle, um deinen ersten Charakter zu erstellen.',
         add: 'Klicke auf eine freie Stelle, um dort einen Charakter zu erstellen.',
@@ -1420,7 +1549,7 @@
         const w = textUnits(label) * 6.8 + 16;
         const lb = sv('g', { class: 'link-label', transform: `translate(${(a.x + b.x) / 2},${(a.y + b.y) / 2})`, tabindex: 0, role: 'button', 'aria-label': `Verbindung ${a.name} – ${b.name}: ${l.short}` });
         lb.dataset.link = l.id;
-        linkEls.set(l.id, { line, lb });
+        linkEls.set(l.id, { line, lb, g });
         lb.append(sv('rect', { x: -w / 2, y: -11, width: w, height: 22, rx: 11 }));
         const t = sv('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }); t.textContent = label;
         const tt = sv('title'); tt.textContent = l.short;
@@ -1446,7 +1575,7 @@
         const g = sv('g', { class: 'node' + (first === c.id ? ' selected' : '') + (c.dead ? ' dead' : ''), transform: `translate(${c.x},${c.y})`, tabindex: 0, role: 'button', 'aria-label': displayName(c) });
         g.dataset.char = c.id;
         paint(g, cols[0] || null);
-        g.append(sv('circle', { class: 'node-bg', r }));
+        g.append(sv('circle', { class: 'halo', r: r + 9 }), sv('circle', { class: 'node-bg', r }));
         const src = safeSrc(c.image);
         if (src) {
           const im = sv('image', { x: -r, y: -r, width: 2 * r, height: 2 * r, 'clip-path': 'url(#clipc)', preserveAspectRatio: 'xMidYMid slice' });
@@ -1477,17 +1606,26 @@
         }
         g.append(nm); gn.append(g);
       });
+      applyFocus();
     }
     function legend() {
-      const used = board.factions.filter((f) => board.characters.some((c) => !c.dead && (c.factionIds || []).includes(f.id)));
+      const used = board.factions.filter((f) => board.characters.some((c) => (c.factionIds || []).includes(f.id)));
       const anyDead = board.characters.some((c) => c.dead);
       if (!used.length && !anyDead) return null;
-      return el('div', { class: 'legend', 'aria-label': 'Legende' },
-        used.map((f) => paint(el('span', { class: 'legend-item' }, el('span', { class: 'dot' }), el('span', { text: f.name })), f.color)),
-        anyDead ? paint(el('span', { class: 'legend-item' }, el('span', { class: 'dot' }), el('span', { text: 'Verstorben †' })), DEAD_COLOR) : null);
+      // Klick auf eine Fraktion: nur ihre Mitglieder zeigen (erneuter Klick hebt das wieder auf)
+      const item = (f) => {
+        const b = el('button', { type: 'button', class: 'legend-item', title: `Nur „${f.name}“ zeigen`, 'aria-pressed': 'false', onclick: () => {
+          const only = F.factions.size === 1 && F.factions.has(f.id) && !F.chars.size;
+          F.factions = only ? new Set() : new Set([f.id]); F.chars = new Set(); renderPanel(); applyFocus();
+        } }, el('span', { class: 'dot' }), el('span', { text: f.name }));
+        b.dataset.faction = f.id;
+        return paint(b, f.color);
+      };
+      return el('div', { class: 'legend', 'aria-label': 'Legende' }, used.map(item),
+        anyDead ? el('span', { class: 'legend-item legend-dead', title: 'Verstorbene behalten ihre Fraktionsfarben und werden verblasst dargestellt' }, el('span', { class: 'dot' }), el('span', { text: 'Verstorben † (verblasst)' })) : null);
     }
     function nodeTap(c) {
-      if (netMode !== 'link') { charInfo(c.id); return; }
+      if (netMode !== 'link') { tapChar(c); return; }
       if (!first) { first = c.id; drawNodes(); updHint(); return; }
       if (first === c.id) { first = null; rubber.style.display = 'none'; drawNodes(); updHint(); return; }
       const a = first; first = null; rubber.style.display = 'none'; drawNodes(); updHint();
@@ -1507,7 +1645,7 @@
             return {
               move(ev) { const p = pz.toWorld(ev.clientX, ev.clientY); c.x = Math.round(ox + p.x - s.x); c.y = Math.round(oy + p.y - s.y); n.setAttribute('transform', `translate(${c.x},${c.y})`); moveLinksOf(c.id); },
               up(ev, moved) {
-                if (!moved) { charInfo(c.id); return; }
+                if (!moved) { tapChar(c); return; }
                 persist(async () => mustAffect(await q(sb.from('characters').update({ x: c.x, y: c.y }).eq('id', c.id).select('id')))).catch(() => {});
               },
             };
@@ -1541,8 +1679,8 @@
     }
 
     main.append(el('div', { class: 'toolbar' }, canEdit() ? modeBtns : null, canEdit() ? btn('🎨 Fraktionen', factionDialog, 'small') : null,
-      el('div', { class: 'spacer' }), zoomButtons(pz, fit)), wrap, hint);
-    const lg = legend(); if (lg) { lg.addEventListener('pointerdown', (e) => e.stopPropagation()); wrap.append(lg); }
+      focusBtn, clearBtn, el('div', { class: 'spacer' }), zoomButtons(pz, fit)), wrap, hint);
+    const lg = legend(); if (lg) { lg.addEventListener('pointerdown', (e) => e.stopPropagation()); wrap.append(lg); legendEl = lg; }
     // Tastatur: Enter / Leertaste auf Kreis oder Linienbeschriftung
     svg.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -1552,7 +1690,7 @@
       else if (lb) { e.preventDefault(); linkInfo(lb.dataset.link); }
     });
     wrap.className = 'canvas grid mode-' + netMode;
-    drawLinks(); drawNodes(); updHint();
+    drawLinks(); drawNodes(); renderPanel(); applyFocus(); updHint();
     const saved = netT.get(board.id);
     if (saved) pz.set(saved); else fit();
   }
@@ -1687,7 +1825,7 @@
       tbody.replaceChildren(...rows.map((c) => {
         const fs = factionsOf(c);
         const tr = el('tr', { tabindex: 0, onclick: () => charInfo(c.id) },
-          el('td', { class: 'narrow' }, paintMany(el('div', { class: 'avatar' }, avatarContent(c)), colorsOf(c))),
+          el('td', { class: 'narrow' }, paintMany(el('div', { class: 'avatar' + (c.dead ? ' dead' : '') }, avatarContent(c)), colorsOf(c))),
           el('td', {}, el('strong', {}, colorName(c))),
           el('td', {}, fs.length ? el('div', { class: 'row tags-inline' }, fs.map(factionTag)) : el('span', { class: 'muted', text: '–' })),
           el('td', { class: 'clip hide-sm', text: c.short }),
