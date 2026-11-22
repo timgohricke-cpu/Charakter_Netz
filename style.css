@@ -181,3 +181,30 @@ legend { padding: 0 6px; font-weight: 600; }
   .unplaced { width: 160px; }
   .toolbar input[type=search] { min-width: 0; flex: 1; }
 }
+
+/* ---------- Version 2: Anmeldung, Teilen, Konto ---------- */
+.auth { flex: 1; display: flex; align-items: flex-start; justify-content: center; padding: 6vh 16px 32px; overflow: auto; }
+.auth-card { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 22px; display: flex; flex-direction: column; gap: 16px; }
+.auth-card h1 { font-size: 22px; }
+.tabs { display: flex; gap: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+.tab { flex: 1; background: none; border: 0; border-radius: 7px; padding: 8px; cursor: pointer; color: var(--muted); font-weight: 600; }
+.tab.active { background: var(--panel-2); color: var(--text); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.form input[type=text], .form input[type=password], .form > input { background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; width: 100%; }
+.check { display: flex; gap: 10px; align-items: center; cursor: pointer; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent-2); flex-shrink: 0; }
+.check-list { display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow: auto; padding: 4px 2px; }
+.form-error { color: var(--danger); margin: 0; min-height: 0; }
+.form-error:empty { display: none; }
+.btn.wide { width: 100%; padding: 10px 14px; }
+.btn.busy, label.btn.busy { opacity: .6; cursor: progress; pointer-events: none; }
+.btn:disabled { opacity: .6; cursor: progress; }
+.btn.danger-bg { background: var(--danger); border-color: var(--danger); color: #fff; }
+.banner.invite { background: #24412f; border-color: var(--ok); }
+.badge { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+.user-btn span { max-width: 22vw; overflow: hidden; text-overflow: ellipsis; }
+.board-card.shared { border-style: dashed; }
+.home .banner { margin-bottom: 16px; flex-wrap: wrap; }
+.home-head + .board-list + .home-head { margin-top: 28px; }
+.modal.wide { max-width: 720px; }
+@media (max-width: 520px) { .hide-xs { display: none; } .badge { max-width: 30vw; } }
