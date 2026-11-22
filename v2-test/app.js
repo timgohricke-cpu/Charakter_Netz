@@ -16,12 +16,18 @@
   const USERNAME_RE = /^[A-Za-z0-9_.-]{3,24}$/;
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const BOARD_COLS = 'id,owner_id,name,map_path,map_w,map_h,created_at,updated_at';
-  const CHAR_COLS = 'id,name,short,info,place,image_path,x,y,map_x,map_y';
+  const CHAR_COLS = 'id,name,short,info,place,image_path,x,y,map_x,map_y,faction_id,dead';
+  const FACTION_COLS = 'id,name,color';
+  const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+  const DEAD_COLOR = '#8b9099';
+  const FACTION_PALETTE = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6', '#e67e22', '#1abc9c', '#e84393', '#a0522d', '#00b894'];
   const LINK_COLS = 'id,a,b,short,long';
 
   // ---------- Hilfsfunktionen ----------
   const SVGNS = 'http://www.w3.org/2000/svg';
-  const R = 36; // Radius der Kreise im Netz
+  const R = 36; // Grundradius der Kreise im Netz
+  // Wichtigkeit: mehr Verbindungen -> etwas größerer Kreis (Wurzel-Kurve, gedeckelt, damit niemand alles überragt)
+  const radiusFor = (deg) => Math.round(Math.min(52, 32 + 4.5 * Math.sqrt(deg || 0)));
   const VIEWS = ['tabelle', 'netz', 'karte'];
   const $ = (s, r = document) => r.querySelector(s);
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -76,6 +82,26 @@
     try { if (val === undefined) return sessionStorage.getItem(key); if (val === null) sessionStorage.removeItem(key); else sessionStorage.setItem(key, val); } catch { return null; }
     return null;
   }
+  // ---------- Hell / Dunkel ----------
+  const THEME_KEY = 'cn-theme';
+  const currentTheme = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+  function applyTheme(t) {
+    document.documentElement.dataset.theme = t;
+    const m = document.querySelector('meta[name=theme-color]');
+    if (m) m.setAttribute('content', t === 'light' ? '#ffffff' : '#1b1f2a');
+  }
+  applyTheme(store(THEME_KEY) || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  function themeButton() {
+    const label = () => (currentTheme() === 'light' ? 'Dunkles Design' : 'Helles Design');
+    const b = el('button', { class: 'icon-btn theme-btn', type: 'button', title: label(), 'aria-label': label() }, currentTheme() === 'light' ? '🌙' : '☀️');
+    b.addEventListener('click', () => {
+      const t = currentTheme() === 'light' ? 'dark' : 'light';
+      applyTheme(t); store(THEME_KEY, t);
+      b.textContent = t === 'light' ? '🌙' : '☀️'; b.title = label(); b.setAttribute('aria-label', label());
+    });
+    return b;
+  }
+
   // Knopf während einer Server-Aktion sperren
   async function busy(button, fn) {
     if (button) { if (button.disabled) return undefined; button.disabled = true; button.classList.add('busy'); }
@@ -136,6 +162,7 @@
     if (code === '42501' || /row-level security|permission denied|not_owner|no_permission/i.test(m)) return 'Dafür hast du keine Berechtigung.';
     if (/limit_boards/.test(m)) return 'Du hast die Höchstzahl von 200 Boards erreicht.';
     if (/limit_characters/.test(m)) return 'Dieses Board hat die Höchstzahl von 2000 Charakteren erreicht.';
+    if (/limit_factions/.test(m)) return 'Ein Board kann höchstens 50 Fraktionen haben.';
     if (/limit_links/.test(m)) return 'Dieses Board hat die Höchstzahl von 10 000 Verbindungen erreicht.';
     if (/Payload too large|exceeded the maximum|too large/i.test(m)) return 'Die Datei ist zu groß.';
     if (/mime type|not supported/i.test(m)) return 'Dieses Dateiformat wird nicht unterstützt.';
@@ -212,18 +239,21 @@
     id: c.id, board_id: bid, name: c.name, short: c.short || '', info: c.info || '', place: c.place || '',
     image_path: c.imagePath || null, x: c.x, y: c.y,
     map_x: c.mapPos ? c.mapPos.x : null, map_y: c.mapPos ? c.mapPos.y : null,
+    faction_id: c.factionId || null, dead: !!c.dead,
   });
   const charFromRow = (r) => ({
     id: r.id, name: r.name, short: r.short, info: r.info, place: r.place, imagePath: r.image_path, image: null,
     x: r.x, y: r.y, mapPos: r.map_x != null && r.map_y != null ? { x: r.map_x, y: r.map_y } : null,
+    factionId: r.faction_id || null, dead: !!r.dead,
   });
 
   // Ein Board komplett vom Server laden (optional mit Bildadressen)
   async function loadBoard(bid, withUrls = true) {
-    const [b, chars, links] = await Promise.all([
+    const [b, chars, links, factions] = await Promise.all([
       q(sb.from('boards').select(BOARD_COLS).eq('id', bid).maybeSingle()),
       fetchAll('characters', CHAR_COLS, bid),
       fetchAll('links', LINK_COLS, bid),
+      fetchAll('factions', FACTION_COLS, bid),
     ]);
     if (!b) return null;
     const out = {
@@ -231,6 +261,7 @@
       map: b.map_path ? { path: b.map_path, w: b.map_w || 1000, h: b.map_h || 500, src: null } : null,
       characters: chars.map(charFromRow),
       links: links.map((l) => ({ id: l.id, a: l.a, b: l.b, short: l.short, long: l.long })),
+      factions: factions.filter((f) => COLOR_RE.test(f.color)).sort((x, y) => x.name.localeCompare(y.name, 'de')),
     };
     if (withUrls) {
       const get = await signUrls([out.map && out.map.path, ...out.characters.map((c) => c.imagePath)]);
@@ -280,7 +311,21 @@
 
   const byId = (id) => board.characters.find((c) => c.id === id);
   const byLink = (id) => board.links.find((l) => l.id === id);
-  const newChar = (x, y) => ({ id: uid(), name: '', short: '', info: '', image: null, imagePath: null, place: '', x, y, mapPos: null });
+  const byFaction = (id) => (id ? board.factions.find((f) => f.id === id) : null);
+  const newChar = (x, y) => ({ id: uid(), name: '', short: '', info: '', image: null, imagePath: null, place: '', x, y, mapPos: null, factionId: null, dead: false });
+  // Farbe eines Charakters: grau wenn verstorben, sonst Fraktionsfarbe (oder keine)
+  function colorOf(c) {
+    if (c.dead) return DEAD_COLOR;
+    const f = byFaction(c.factionId);
+    return f && COLOR_RE.test(f.color) ? f.color : null;
+  }
+  const paint = (node, color) => { if (color) node.style.setProperty('--c', color); else node.style.removeProperty('--c'); return node; };
+  function degrees() {
+    const m = new Map();
+    for (const l of board.links) { m.set(l.a, (m.get(l.a) || 0) + 1); m.set(l.b, (m.get(l.b) || 0) + 1); }
+    return m;
+  }
+  const displayName = (c) => (c.dead ? c.name + ' †' : c.name);
 
   // Server-Aktion ausführen; bei Fehler Meldung zeigen und Board neu laden
   async function persist(fn) {
@@ -339,7 +384,11 @@
 
   // ---------- Dialoge ----------
   let currentModal = null;
-  function closeModal() { if (currentModal) { currentModal.remove(); currentModal = null; } }
+  function closeModal() {
+    if (!currentModal) return;
+    const cb = currentModal._onClose; currentModal.remove(); currentModal = null;
+    if (cb) cb();
+  }
   function modal(title, body, actions = [], opts = {}) {
     closeModal();
     const box = el('div', { class: 'modal' + (opts.wide ? ' wide' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
@@ -427,7 +476,7 @@
     $('#app').replaceChildren(
       el('header', { class: 'topbar' },
         el('div', { class: 'brand' }, el('img', { src: 'icon.svg', alt: '', class: 'logo' }), el('span', { text: 'Charakter-Netz' })),
-        el('div', { class: 'spacer' }), installButton()),
+        el('div', { class: 'spacer' }), themeButton(), installButton()),
       el('main', { class: 'auth' }, el('div', { class: 'auth-card' },
         pending ? el('div', { class: 'banner invite' }, el('span', { text: 'Dir wurde ein Board geteilt. Melde dich an oder erstelle kostenlos ein Konto, um es anzusehen.' })) : null,
         el('div', { class: 'tabs', role: 'tablist' },
@@ -520,7 +569,7 @@
   function topbarHome() {
     return el('header', { class: 'topbar' },
       el('div', { class: 'brand' }, el('img', { src: 'icon.svg', alt: '', class: 'logo' }), el('span', { class: 'hide-xs', text: 'Charakter-Netz' })),
-      el('div', { class: 'spacer' }), installButton(),
+      el('div', { class: 'spacer' }), themeButton(), installButton(),
       el('button', { class: 'btn ghost small user-btn', type: 'button', onclick: accountDialog, title: 'Mein Konto' }, '👤 ', el('span', { text: me.username })));
   }
   async function showHome() {
@@ -661,8 +710,8 @@
     };
     const map = b.map ? { src: await dl(b.map.path), w: b.map.w, h: b.map.h } : null;
     const characters = [];
-    for (const c of b.characters) characters.push({ id: c.id, name: c.name, short: c.short, info: c.info, image: await dl(c.imagePath), place: c.place, x: c.x, y: c.y, mapPos: c.mapPos });
-    const out = { format: 'charakter-netz', version: 1, id: b.id, name: b.name, created: Date.parse(b.created), updated: Date.parse(b.updated), map: map && map.src ? map : null, characters, links: b.links };
+    for (const c of b.characters) characters.push({ id: c.id, name: c.name, short: c.short, info: c.info, image: await dl(c.imagePath), place: c.place, x: c.x, y: c.y, mapPos: c.mapPos, faction: c.factionId, dead: c.dead });
+    const out = { format: 'charakter-netz', version: 2, id: b.id, name: b.name, created: Date.parse(b.created), updated: Date.parse(b.updated), map: map && map.src ? map : null, factions: b.factions, characters, links: b.links };
     const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
     const a = el('a', { href: URL.createObjectURL(blob), download: (b.name.replace(/[^\w\-äöüÄÖÜß ]+/g, '').trim() || 'board') + '.json' });
     document.body.append(a); a.click(); a.remove();
@@ -686,11 +735,15 @@
     const img = (s) => (typeof s === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(s) ? s : null);
     const num = (n) => (Number.isFinite(n) ? clamp(n, -1e6, 1e6) : 0);
     if (!o || typeof o !== 'object' || !Array.isArray(o.characters)) throw new UErr('Keine gültige Board-Datei.');
+    const fMap = new Map();
+    const factions = (Array.isArray(o.factions) ? o.factions : []).slice(0, 50)
+      .filter((f) => f && typeof f.name === 'string' && f.name.trim() && COLOR_RE.test(f.color))
+      .map((f) => { const id = uid(); fMap.set(f.id, id); return { id, name: str(f.name, 60).trim(), color: f.color.toLowerCase() }; });
     const idMap = new Map();
     const characters = o.characters.slice(0, 2000).map((c) => {
       const id = uid(); idMap.set(c && c.id, id);
       const mp = c && c.mapPos && Number.isFinite(c.mapPos.x) && Number.isFinite(c.mapPos.y) ? { x: clamp(c.mapPos.x, 0, 1), y: clamp(c.mapPos.y, 0, 1) } : null;
-      return { id, name: str(c && c.name, 100).trim() || 'Unbenannt', short: str(c && c.short, 300), info: str(c && c.info, 20000), image: img(c && c.image), place: str(c && c.place, 2000), x: Math.round(num(c && c.x)), y: Math.round(num(c && c.y)), mapPos: mp };
+      return { id, name: str(c && c.name, 100).trim() || 'Unbenannt', short: str(c && c.short, 300), info: str(c && c.info, 20000), image: img(c && c.image), place: str(c && c.place, 2000), x: Math.round(num(c && c.x)), y: Math.round(num(c && c.y)), mapPos: mp, factionId: (c && fMap.get(c.faction)) || null, dead: !!(c && c.dead === true) };
     });
     const seen = new Set();
     const links = (Array.isArray(o.links) ? o.links : []).slice(0, 10000)
@@ -698,7 +751,7 @@
       .map((l) => ({ id: uid(), a: idMap.get(l.a), b: idMap.get(l.b), short: str(l.short, 120).trim() || '…', long: str(l.long, 20000) }))
       .filter((l) => { const k = [l.a, l.b].sort().join(); if (seen.has(k)) return false; seen.add(k); return true; });
     const map = o.map && img(o.map.src) ? { src: o.map.src } : null;
-    return { name: str(o.name, 100).trim() || 'Importiertes Board', map, characters, links };
+    return { name: str(o.name, 100).trim() || 'Importiertes Board', map, factions, characters, links };
   }
   // Ein (geprüftes) Board im Format von Version 1 ins Konto hochladen
   async function uploadBoardObject(o, onProgress) {
@@ -710,6 +763,7 @@
         const p = await uploadImage(bid, r.blob, 'map-');
         mustAffect(await q(sb.from('boards').update({ map_path: p, map_w: r.w, map_h: r.h }).eq('id', bid).select('id')));
       }
+      if (o.factions.length) await q(sb.from('factions').insert(o.factions.map((f) => ({ ...f, board_id: bid }))));
       const rows = new Array(o.characters.length);
       let done = 0, next = 0;
       const worker = async () => {
@@ -792,7 +846,7 @@
         canEdit() ? null : el('span', { class: 'badge', title: 'Du kannst dieses Board nur ansehen.', text: '👁 Nur ansehen' + (board.ownerName ? ' · von ' + board.ownerName : '') }),
         el('div', { class: 'spacer' }),
         canEdit() ? btn('🔗 Link teilen', () => shareDialog(board.id, board.name), 'small primary') : null,
-        installButton()),
+        themeButton(), installButton()),
       el('div', { class: 'board-layout' }, nav, main));
     if (view === 'tabelle') renderTable(main);
     else if (view === 'karte') renderMap(main);
@@ -801,6 +855,60 @@
   function avatarContent(c) {
     const src = safeSrc(c.image);
     return src ? el('img', { src, alt: '' }) : el('span', { text: initials(c.name) });
+  }
+
+  // ---------- Fraktionen verwalten ----------
+  function factionDialog() {
+    if (!canEdit()) return;
+    let changed = false;
+    const list = el('div', { class: 'faction-list' });
+    const count = (fid) => board.characters.filter((c) => c.factionId === fid).length;
+    const save = async (f, patch) => {
+      try {
+        mustAffect(await q(sb.from('factions').update(patch).eq('id', f.id).select('id')));
+        Object.assign(f, patch); changed = true;
+      } catch (e) { toast(errMsg(e)); }
+    };
+    function draw() {
+      list.replaceChildren(...(board.factions.length ? board.factions.map((f) => {
+        const color = el('input', { type: 'color', value: f.color, 'aria-label': 'Farbe von ' + f.name });
+        color.addEventListener('change', () => { if (COLOR_RE.test(color.value)) save(f, { color: color.value.toLowerCase() }); });
+        const name = el('input', { type: 'text', value: f.name, maxlength: 60, 'aria-label': 'Name der Fraktion' });
+        name.addEventListener('change', () => { const v = name.value.trim(); if (!v) { name.value = f.name; return; } save(f, { name: v }); });
+        let armed = false;
+        const del = btn('Löschen', () => {
+          if (!armed) { armed = true; del.textContent = 'Wirklich löschen?'; del.title = 'Charaktere verlieren dabei nur ihre Fraktion.'; setTimeout(() => { armed = false; del.textContent = 'Löschen'; }, 4000); return; }
+          busy(del, async () => {
+            try { mustAffect(await q(sb.from('factions').delete().eq('id', f.id).select('id'))); } catch (e) { toast(errMsg(e)); return; }
+            board.factions = board.factions.filter((x) => x.id !== f.id);
+            board.characters.forEach((c) => { if (c.factionId === f.id) c.factionId = null; });
+            changed = true; draw();
+          });
+        }, 'ghost small danger');
+        return el('div', { class: 'faction-row' }, color, name, el('span', { class: 'muted small', text: `${count(f.id)} Ch.` }), del);
+      }) : [el('p', { class: 'muted', text: 'Noch keine Fraktionen. Lege unten die erste an.' })]));
+    }
+    const newColor = el('input', { type: 'color', value: FACTION_PALETTE[board.factions.length % FACTION_PALETTE.length], 'aria-label': 'Farbe' });
+    const newName = el('input', { type: 'text', maxlength: 60, placeholder: 'z. B. Nordreich, Rebellen, Gilde' });
+    const add = btn('+ Hinzufügen', () => {
+      const v = newName.value.trim();
+      if (!v) { toast('Bitte einen Namen für die Fraktion eingeben.'); newName.focus(); return; }
+      if (board.factions.some((f) => f.name.toLowerCase() === v.toLowerCase())) { toast('Diese Fraktion gibt es schon.'); return; }
+      busy(add, async () => {
+        const f = { id: uid(), name: v, color: COLOR_RE.test(newColor.value) ? newColor.value.toLowerCase() : FACTION_PALETTE[0] };
+        try { await q(sb.from('factions').insert({ ...f, board_id: board.id })); } catch (e) { toast(errMsg(e)); return; }
+        board.factions.push(f); board.factions.sort((x, y) => x.name.localeCompare(y.name, 'de'));
+        changed = true; newName.value = ''; newColor.value = FACTION_PALETTE[board.factions.length % FACTION_PALETTE.length]; draw(); newName.focus();
+      });
+    }, 'primary small');
+    newName.addEventListener('keydown', (e) => { if (e.key === 'Enter') add.click(); });
+    draw();
+    const box = modal('Fraktionen', el('div', { class: 'form' },
+      el('p', { class: 'muted', text: 'Die Farbe einer Fraktion wird zur Randfarbe des Kreises und zur Farbe des Namens. Verstorbene Charaktere werden immer grau dargestellt.' }),
+      list,
+      el('fieldset', {}, el('legend', { text: 'Neue Fraktion' }), el('div', { class: 'faction-row' }, newColor, newName, add)))
+    , [btn('Fertig', closeModal, 'primary')]);
+    box.parentElement._onClose = () => { if (changed) renderBoard(); };
   }
 
   // ---------- Charakter: Erstellen / Bearbeiten ----------
@@ -813,8 +921,17 @@
     info.value = d.info;
     const place = el('textarea', { rows: 2, maxlength: 2000, placeholder: 'z. B. Lebt in der Hafenstadt Velmar' });
     place.value = d.place;
+    const faction = el('select', { 'aria-label': 'Fraktion' },
+      el('option', { value: '', text: '– keine Fraktion –' }),
+      board.factions.map((f) => el('option', { value: f.id, text: f.name })));
+    faction.value = byFaction(d.factionId) ? d.factionId : '';
+    const dead = el('input', { type: 'checkbox', checked: !!d.dead });
     const preview = el('div', { class: 'avatar big' });
-    const setPrev = () => preview.replaceChildren(avatarContent({ ...d, name: name.value || d.name }));
+    const setPrev = () => {
+      preview.replaceChildren(avatarContent({ ...d, name: name.value || d.name }));
+      paint(preview, colorOf({ dead: dead.checked, factionId: faction.value || null }));
+    };
+    faction.addEventListener('change', setPrev); dead.addEventListener('change', setPrev);
     const rmImg = btn('Bild entfernen', () => { d.image = null; d._blob = null; d._rm = true; setPrev(); rmImg.hidden = true; }, 'ghost small danger');
     rmImg.hidden = !d.image;
     const file = el('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onchange: async () => {
@@ -822,7 +939,7 @@
     } });
     name.addEventListener('input', () => { if (!d.image) setPrev(); });
     setPrev();
-    const collect = () => { d.name = name.value.trim(); d.short = short.value.trim(); d.info = info.value; d.place = place.value; };
+    const collect = () => { d.name = name.value.trim(); d.short = short.value.trim(); d.info = info.value; d.place = place.value; d.factionId = faction.value || null; d.dead = dead.checked; };
     const mapState = el('span', { class: 'muted' });
     const rmPos = btn('Entfernen', () => { d.mapPos = null; updMap(); }, 'ghost small danger');
     const setPos = btn('Auf Weltkarte setzen', () => {
@@ -837,6 +954,10 @@
       el('div', { class: 'form-img' }, preview, el('div', { class: 'col' }, el('label', { class: 'btn small' }, 'Bild wählen', file), rmImg)),
       field('Name', name),
       field('Kurzbeschreibung', short),
+      el('div', { class: 'row2' },
+        field('Fraktion', faction),
+        el('label', { class: 'check dead-check' }, dead, el('span', { text: 'Verstorben (wird grau dargestellt)' }))),
+      board.factions.length ? null : el('small', { class: 'muted', text: 'Tipp: Fraktionen mit eigenen Farben legst du im Charakternetz über „🎨 Fraktionen“ an.' }),
       field('Infos', info),
       el('fieldset', {}, el('legend', { text: 'Standort' }),
         field('Standort-Beschreibung', place),
@@ -850,7 +971,7 @@
         let path = d.imagePath || null; let uploaded = null;
         try {
           if (d._blob) { uploaded = await uploadImage(board.id, d._blob, 'p-'); path = uploaded; } else if (d._rm) path = null;
-          const rec = { id: d.id, name: d.name, short: d.short, info: d.info, place: d.place, imagePath: path, image: path ? d.image : null, x: d.x, y: d.y, mapPos: d.mapPos };
+          const rec = { id: d.id, name: d.name, short: d.short, info: d.info, place: d.place, imagePath: path, image: path ? d.image : null, x: d.x, y: d.y, mapPos: d.mapPos, factionId: byFaction(d.factionId) ? d.factionId : null, dead: !!d.dead };
           const row = charRow(rec, board.id);
           if (isNew) await q(sb.from('characters').insert(row));
           else { const { id, board_id: _b, ...rest } = row; mustAffect(await q(sb.from('characters').update(rest).eq('id', id).select('id'))); }
@@ -873,8 +994,11 @@
     if (!c) return;
     const links = board.links.filter((l) => l.a === id || l.b === id);
     const body = el('div', { class: 'info' },
-      el('div', { class: 'info-head' }, el('div', { class: 'avatar big' }, avatarContent(c)),
-        el('div', {}, el('h3', { text: c.name }), c.short ? el('p', { class: 'lead', text: c.short }) : null)),
+      el('div', { class: 'info-head' }, paint(el('div', { class: 'avatar big' }, avatarContent(c)), colorOf(c)),
+        el('div', {}, paint(el('h3', { class: 'colored', text: displayName(c) }), colorOf(c)), c.short ? el('p', { class: 'lead', text: c.short }) : null,
+          el('div', { class: 'row tags' },
+            byFaction(c.factionId) ? paint(el('span', { class: 'tag' }, el('span', { class: 'dot' }), el('span', { text: byFaction(c.factionId).name })), byFaction(c.factionId).color) : null,
+            c.dead ? paint(el('span', { class: 'tag' }, el('span', { class: 'dot' }), el('span', { text: 'Verstorben' })), DEAD_COLOR) : null))),
       c.info ? section('Infos', el('p', { class: 'pre', text: c.info })) : null,
       (c.place || c.mapPos) ? section('Standort',
         c.place ? el('p', { class: 'pre', text: c.place }) : null,
@@ -1010,7 +1134,7 @@
     let first = null; // erster Kreis beim Verbinden
     const wrap = el('div', { class: 'canvas grid' });
     const svg = sv('svg', { class: 'net', role: 'img', 'aria-label': 'Charakternetz' });
-    const defs = sv('defs'); const cp = sv('clipPath', { id: 'clipc' }); cp.append(sv('circle', { cx: 0, cy: 0, r: R })); defs.append(cp);
+    const defs = sv('defs'); const cp = sv('clipPath', { id: 'clipc', clipPathUnits: 'objectBoundingBox' }); cp.append(sv('circle', { cx: 0.5, cy: 0.5, r: 0.5 })); defs.append(cp);
     const vp = sv('g'); const gl = sv('g'); const gn = sv('g'); const glb = sv('g'); // Beschriftungen über den Kreisen
     const rubber = sv('line', { class: 'rubber' }); rubber.style.display = 'none';
     vp.append(gl, rubber, gn, glb); svg.append(defs, vp); wrap.append(svg);
@@ -1052,22 +1176,35 @@
     }
     function drawNodes() {
       gn.replaceChildren();
+      const deg = degrees();
       for (const c of board.characters) {
-        const g = sv('g', { class: 'node' + (first === c.id ? ' selected' : ''), transform: `translate(${c.x},${c.y})` });
+        const r = radiusFor(deg.get(c.id));
+        const g = sv('g', { class: 'node' + (first === c.id ? ' selected' : '') + (c.dead ? ' dead' : ''), transform: `translate(${c.x},${c.y})` });
         g.dataset.char = c.id;
-        g.append(sv('circle', { class: 'node-bg', r: R }));
+        paint(g, colorOf(c));
+        g.append(sv('circle', { class: 'node-bg', r }));
         const src = safeSrc(c.image);
         if (src) {
-          const im = sv('image', { x: -R, y: -R, width: 2 * R, height: 2 * R, 'clip-path': 'url(#clipc)', preserveAspectRatio: 'xMidYMid slice' });
+          const im = sv('image', { x: -r, y: -r, width: 2 * r, height: 2 * r, 'clip-path': 'url(#clipc)', preserveAspectRatio: 'xMidYMid slice' });
           im.setAttribute('href', src);
           g.append(im);
         } else {
-          const t = sv('text', { class: 'initials', 'text-anchor': 'middle', 'dominant-baseline': 'central' }); t.textContent = initials(c.name); g.append(t);
+          const t = sv('text', { class: 'initials', 'text-anchor': 'middle', 'dominant-baseline': 'central' }); t.textContent = initials(c.name);
+          t.style.fontSize = Math.round(r * 0.6) + 'px';
+          g.append(t);
         }
-        g.append(sv('circle', { class: 'node-ring', r: R }));
-        const nm = sv('text', { class: 'node-name', 'text-anchor': 'middle', y: R + 18 }); nm.textContent = trunc(c.name, 24);
+        g.append(sv('circle', { class: 'node-ring', r }));
+        const nm = sv('text', { class: 'node-name', 'text-anchor': 'middle', y: r + 18 }); nm.textContent = trunc(displayName(c), 26);
         g.append(nm); gn.append(g);
       }
+    }
+    function legend() {
+      const used = board.factions.filter((f) => board.characters.some((c) => c.factionId === f.id && !c.dead));
+      const anyDead = board.characters.some((c) => c.dead);
+      if (!used.length && !anyDead) return null;
+      return el('div', { class: 'legend', 'aria-label': 'Legende' },
+        used.map((f) => paint(el('span', { class: 'legend-item' }, el('span', { class: 'dot' }), el('span', { text: f.name })), f.color)),
+        anyDead ? paint(el('span', { class: 'legend-item' }, el('span', { class: 'dot' }), el('span', { text: 'Verstorben †' })), DEAD_COLOR) : null);
     }
     function nodeTap(c) {
       if (netMode !== 'link') { charInfo(c.id); return; }
@@ -1116,13 +1253,15 @@
       const r = pz.rect();
       if (!board.characters.length) { pz.set({ x: r.width / 2, y: r.height / 2, k: 1 }); return; }
       const xs = board.characters.map((c) => c.x), ys = board.characters.map((c) => c.y);
-      const pad = R + 50;
+      const pad = 52 + 50;
       const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad, minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
       const k = clamp(Math.min(r.width / (maxX - minX), r.height / (maxY - minY)), 0.1, 1.5);
       pz.set({ x: r.width / 2 - ((minX + maxX) / 2) * k, y: r.height / 2 - ((minY + maxY) / 2) * k, k });
     }
 
-    main.append(el('div', { class: 'toolbar' }, canEdit() ? modeBtns : null, el('div', { class: 'spacer' }), zoomButtons(pz, fit)), wrap, hint);
+    main.append(el('div', { class: 'toolbar' }, canEdit() ? modeBtns : null, canEdit() ? btn('🎨 Fraktionen', factionDialog, 'small') : null,
+      el('div', { class: 'spacer' }), zoomButtons(pz, fit)), wrap, hint);
+    const lg = legend(); if (lg) { lg.addEventListener('pointerdown', (e) => e.stopPropagation()); wrap.append(lg); }
     wrap.className = 'canvas grid mode-' + netMode;
     drawLinks(); drawNodes(); updHint();
     const saved = netT.get(board.id);
@@ -1163,8 +1302,8 @@
     const pins = [];
     for (const c of board.characters) {
       if (!c.mapPos) continue;
-      const p = el('div', { class: 'pin' + (focusChar === c.id ? ' focus' : ''), role: 'button', tabindex: 0, title: c.name, 'aria-label': c.name },
-        el('span', { class: 'pin-dot' }, avatarContent(c)), el('span', { class: 'pin-name', text: c.name }));
+      const p = paint(el('div', { class: 'pin' + (focusChar === c.id ? ' focus' : '') + (c.dead ? ' dead' : ''), role: 'button', tabindex: 0, title: displayName(c), 'aria-label': displayName(c) },
+        el('span', { class: 'pin-dot' }, avatarContent(c)), el('span', { class: 'pin-name', text: displayName(c) })), colorOf(c));
       p.dataset.char = c.id;
       p.style.left = c.mapPos.x * M.w + 'px'; p.style.top = c.mapPos.y * M.h + 'px';
       p.addEventListener('keydown', (e) => { if (e.key === 'Enter') charInfo(c.id); });
@@ -1242,25 +1381,28 @@
     const tbody = el('tbody');
     const linkCount = new Map();
     for (const l of board.links) { linkCount.set(l.a, (linkCount.get(l.a) || 0) + 1); linkCount.set(l.b, (linkCount.get(l.b) || 0) + 1); }
-    const cols = [['bild', '', 'narrow'], ['name', 'Name', ''], ['short', 'Kurzbeschreibung', ''], ['place', 'Standort', 'hide-sm'], ['links', 'Verbindungen', 'hide-sm'], ['map', 'Karte', 'narrow hide-sm']];
-    const val = (c, k) => (k === 'links' ? linkCount.get(c.id) || 0 : k === 'map' ? (c.mapPos ? 1 : 0) : (c[k] || '').toLowerCase());
+    const cols = [['bild', '', 'narrow'], ['name', 'Name', ''], ['faction', 'Fraktion', ''], ['short', 'Kurzbeschreibung', 'hide-sm'], ['place', 'Standort', 'hide-sm'], ['links', 'Verbindungen', 'hide-sm'], ['map', 'Karte', 'narrow hide-sm']];
+    const val = (c, k) => (k === 'links' ? linkCount.get(c.id) || 0 : k === 'map' ? (c.mapPos ? 1 : 0)
+      : k === 'faction' ? (c.dead ? '~' : '') + ((byFaction(c.factionId) || {}).name || '\uffff').toLowerCase() : (c[k] || '').toLowerCase());
     function fill() {
       const qy = tableFilter.trim().toLowerCase();
       const rows = board.characters
-        .filter((c) => !qy || [c.name, c.short, c.place, c.info].some((s) => (s || '').toLowerCase().includes(qy)))
+        .filter((c) => !qy || [c.name, c.short, c.place, c.info, (byFaction(c.factionId) || {}).name, c.dead ? 'verstorben tot' : ''].some((s) => (s || '').toLowerCase().includes(qy)))
         .sort((a, b) => { const x = val(a, tableSort.key), y = val(b, tableSort.key); return (x < y ? -1 : x > y ? 1 : 0) * tableSort.dir; });
       tbody.replaceChildren(...rows.map((c) => {
+        const f = byFaction(c.factionId);
         const tr = el('tr', { tabindex: 0, onclick: () => charInfo(c.id) },
-          el('td', { class: 'narrow' }, el('div', { class: 'avatar' }, avatarContent(c))),
-          el('td', {}, el('strong', { text: c.name })),
-          el('td', { class: 'clip', text: c.short }),
+          el('td', { class: 'narrow' }, paint(el('div', { class: 'avatar' }, avatarContent(c)), colorOf(c))),
+          el('td', {}, paint(el('strong', { class: 'colored', text: displayName(c) }), colorOf(c))),
+          el('td', {}, f ? paint(el('span', { class: 'tag' }, el('span', { class: 'dot' }), el('span', { text: f.name })), f.color) : el('span', { class: 'muted', text: '–' })),
+          el('td', { class: 'clip hide-sm', text: c.short }),
           el('td', { class: 'clip hide-sm', text: c.place }),
           el('td', { class: 'hide-sm', text: String(linkCount.get(c.id) || 0) }),
           el('td', { class: 'narrow hide-sm', text: c.mapPos ? '✓' : '–' }));
         tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') charInfo(c.id); });
         return tr;
       }));
-      if (!rows.length) tbody.append(el('tr', {}, el('td', { colspan: 6, class: 'muted', text: board.characters.length ? 'Keine Treffer.' : (canEdit() ? 'Noch keine Charaktere. Füge über „+ Charakter“ einen hinzu.' : 'Dieses Board hat noch keine Charaktere.') })));
+      if (!rows.length) tbody.append(el('tr', {}, el('td', { colspan: 7, class: 'muted', text: board.characters.length ? 'Keine Treffer.' : (canEdit() ? 'Noch keine Charaktere. Füge über „+ Charakter“ einen hinzu.' : 'Dieses Board hat noch keine Charaktere.') })));
     }
     search.addEventListener('input', () => { tableFilter = search.value; fill(); });
     const thead = el('thead', {}, el('tr', {}, cols.map(([k, label, cls]) => el('th', { class: cls, onclick: k === 'bild' ? null : () => {
