@@ -19,10 +19,11 @@ SCHEMA = os.path.join(ROOT, 'supabase', 'schema.sql')
 MOCK = os.path.join(os.path.dirname(__file__), 'mock_supabase.sql')
 # Frühere veröffentlichte Stände (Commits), von denen ein Upgrade funktionieren muss.
 # Bei jeder Änderung an schema.sql den dann veröffentlichten Commit hier ergänzen.
-UPGRADE_FROM = ['42f3612', 'b4d7683', '624212f', '6773063']
+UPGRADE_FROM = ['42f3612', 'b4d7683', '624212f', '6773063', 'e695fe0']
 
 OWNER, VISITOR, STRANGER = ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
                             '33333333-3333-3333-3333-333333333333')
+MEMBER2 = '55555555-5555-5555-5555-555555555555'  # zweites Mitglied (Bearbeitungsrechte, seit 2.11)
 results = []
 
 
@@ -104,7 +105,8 @@ def suite(db, label):
     ok, _, err = psql(db, f"""insert into auth.users (id, email, raw_user_meta_data) values
       ('{OWNER}', 'owner@users.charakter-netz.app', '{{"username":"Owner"}}'),
       ('{VISITOR}', 'visitor@users.charakter-netz.app', '{{"username":"visitor"}}'),
-      ('{STRANGER}', 'stranger@users.charakter-netz.app', '{{"username":"stranger"}}');""")
+      ('{STRANGER}', 'stranger@users.charakter-netz.app', '{{"username":"stranger"}}'),
+      ('{MEMBER2}', 'member2@users.charakter-netz.app', '{{"username":"member2"}}');""")
     check(T('Registrierung (Trigger legt Profile an)'), ok, err)
     # Ersteller legt Board mit Inhalt an
     ok, bid, err = psql(db, "insert into boards (name) values ('B1') returning id;", OWNER, 'authenticated')
@@ -154,15 +156,16 @@ def suite(db, label):
         check(T(f'Besucher darf nicht: {name}'), r == 'ERR' or r == '', r)
     # Funktionen: interne nicht aufrufbar, Hilfen nicht im öffentlichen Schema
     ok, out, _ = psql(db, """select string_agg(p.proname, ',' order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public' and p.proname in ('handle_new_user','touch_board','enforce_limits','protect_columns','touch_updated_at','cn_email_domain','protect_auth_email')
+       where n.nspname = 'public' and p.proname in ('handle_new_user','touch_board','enforce_limits','protect_columns','touch_updated_at','cn_email_domain','protect_auth_email','set_note_author','protect_visits')
        and has_function_privilege('authenticated', p.oid, 'execute');""")
     check(T('Interne Funktionen für Angemeldete gesperrt'), ok and out == '', out)
     ok, out, _ = psql(db, """select string_agg(p.proname, ',') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public' and p.proname in ('is_board_owner','can_read_board','can_see_profile','board_image_quota_ok','board_id_from_path');""")
+       where n.nspname = 'public' and p.proname in ('is_board_owner','can_read_board','can_see_profile','board_image_quota_ok','board_id_from_path','can_edit_board','can_write_image');""")
     check(T('Rechte-Hilfen nicht im öffentlichen Schema'), ok and out == '', out)
     ok, out, _ = psql(db, """select string_agg(p.proname, ',' order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'public' and p.prosecdef and has_function_privilege('authenticated', p.oid, 'execute');""")
     check(T('Nur die 5 gewollten API-Funktionen (Advisor-Warnung)'), ok and out == 'delete_my_account,get_share_token,open_shared_board,reset_share_link,transfer_board_owner', out)
+    edit_rights_and_notes(db, T, cnt, bid, tok, C1, C2, F1)
     # Ersteller übertragen (seit 2.8)
     owner_of = lambda: psql(db, f"select owner_id from boards where id='{bid}';")[1]
     tr = lambda user, new: psql(db, f"select transfer_board_owner('{bid}', '{new}');", user, 'authenticated')
@@ -259,6 +262,99 @@ def suite(db, label):
     check(T('Name mit 1 Zeichen abgelehnt'), not ok, err)
     # Konto löschen
     check(T('Konto löschen'), cnt(STRANGER, 'select delete_my_account();') != 'ERR' and cnt(None, f"select count(*) from auth.users where id='{STRANGER}';", None) == '0')
+
+
+def edit_rights_and_notes(db, T, cnt, bid, tok, C1, C2, F1):
+    """Bearbeitungsrechte für Mitglieder und Notizzettel (seit 2.11). Stellt am Ende den Ausgangszustand wieder her."""
+    n = lambda user, sql: cnt(user, f'with u as ({sql} returning 1) select count(*) from u;')
+    can_edit = lambda: psql(db, f"select can_edit from board_visits where board_id='{bid}' and user_id='{VISITOR}';")[1]
+    check(T('Rechte: Mitglied 2 öffnet Link'), cnt(MEMBER2, f"select open_shared_board('{bid}', '{tok}') is not null;") == 't')
+    check(T('Rechte: neue Mitglieder dürfen standardmäßig nicht bearbeiten'), can_edit() == 'f'
+          and cnt(VISITOR, f"select members_can_edit from boards where id='{bid}';") == 'f')
+    # Mitglied ohne Recht kann sich keins geben
+    check(T('Rechte: Besucher kann sich selbst kein Bearbeitungsrecht geben'), n(VISITOR, f"update board_visits set can_edit=true where user_id='{VISITOR}'") in ('0', 'ERR') and can_edit() == 'f')
+    check(T('Rechte: Besucher kann „Alle dürfen bearbeiten“ nicht einschalten'), n(VISITOR, f"update boards set members_can_edit=true where id='{bid}'") in ('0', 'ERR')
+          and psql(db, f"select members_can_edit from boards where id='{bid}';")[1] == 'f')
+    check(T('Rechte: Besucher kann Notiz nicht anheften'), cnt(VISITOR, f"insert into character_notes (board_id, character_id, body) values ('{bid}', '{C1}', 'x');") == 'ERR')
+    check(T('Rechte: Fremder kann kein Recht vergeben'), n(STRANGER, f"update board_visits set can_edit=true where board_id='{bid}'") in ('0', 'ERR') and can_edit() == 'f')
+    # Ersteller vergibt das Recht einzeln
+    check(T('Rechte: Ersteller gibt Besucher Bearbeitungsrecht'), n(OWNER, f"update board_visits set can_edit=true where board_id='{bid}' and user_id='{VISITOR}'") == '1' and can_edit() == 't')
+    check(T('Rechte: Ersteller kann Besuchszeit anderer nicht ändern'), cnt(OWNER, f"update board_visits set visited_at=now() where board_id='{bid}' and user_id='{VISITOR}';") == 'ERR')
+    check(T('Rechte: Mitglied aktualisiert eigene Besuchszeit weiter'), n(VISITOR, f"update board_visits set visited_at=now() where board_id='{bid}' and user_id='{VISITOR}'") == '1')
+    for name, sql, exp in [
+            ('Charakter ändern', f"update characters set short='vom Mitglied' where id='{C2}'", '1'),
+            ('Charakter anlegen', f"insert into characters (board_id, name) values ('{bid}', 'Neu vom Mitglied')", '1'),
+            ('Verbindung anlegen', f"insert into links (board_id, a, b, short) values ('{bid}', '{C2}', '{C1}', 'm')", '1'),
+            ('Fraktion anlegen', f"insert into factions (board_id, name, color) values ('{bid}', 'MF', '#00ff00')", '1'),
+            ('Fraktion zuordnen', f"insert into character_factions values ('{bid}', '{C2}', '{F1}', 0)", '1'),
+            ('Bild hochladen', f"insert into storage.objects (bucket_id, name) values ('board-images', '{bid}/p-mitglied.jpg')", '1'),
+            ('Bild löschen', f"delete from storage.objects where name='{bid}/p-mitglied.jpg'", '1'),
+            ('Weltkarte ändern', f"update boards set map_w=11, map_h=12 where id='{bid}'", '1')]:
+        r = n(VISITOR, sql)
+        check(T(f'Rechte: Bearbeiter darf {name}'), r == exp, r)
+    for name, sql in [('Board umbenennen', f"update boards set name='hack' where id='{bid}'"),
+                      ('Titelbild setzen', f"update boards set cover_path='{bid}/cover-12345678-1234-4123-8123-123456789abc.jpg' where id='{bid}'"),
+                      ('„Alle dürfen bearbeiten“ ändern', f"update boards set members_can_edit=true where id='{bid}'"),
+                      ('Board löschen', f"delete from boards where id='{bid}'"),
+                      ('Titelbild-Datei hochladen', f"insert into storage.objects (bucket_id, name) values ('board-images', '{bid}/cover-x.jpg')"),
+                      ('Rechte anderer ändern', f"update board_visits set can_edit=true where board_id='{bid}' and user_id='{MEMBER2}'"),
+                      ('Mitglied entfernen', f"delete from board_visits where board_id='{bid}' and user_id='{MEMBER2}'")]:
+        r = n(VISITOR, sql)
+        check(T(f'Rechte: Bearbeiter darf nicht {name}'), r in ('0', 'ERR'), r)
+    check(T('Rechte: Board-Name unverändert'), psql(db, f"select name from boards where id='{bid}';")[1] != 'hack')
+    psql(db, f"insert into storage.objects (bucket_id, name) values ('board-images', '{bid}/cover-y.jpg');")
+    check(T('Rechte: Bearbeiter darf Titelbild-Datei nicht löschen'), n(VISITOR, f"delete from storage.objects where name='{bid}/cover-y.jpg'") in ('0', 'ERR'))
+    psql(db, f"delete from storage.objects where name='{bid}/cover-y.jpg';")
+    for name, sql in [('Schlüssel lesen', f"select coalesce(get_share_token('{bid}')::text, 'null');"),
+                      ('Link erneuern', f"select reset_share_link('{bid}');"),
+                      ('Ersteller übertragen', f"select transfer_board_owner('{bid}', '{VISITOR}');")]:
+        r = cnt(VISITOR, sql)
+        check(T(f'Rechte: Bearbeiter darf nicht {name}'), r in ('null', 'ERR'), r)
+    check(T('Rechte: Mitglied 2 ohne Recht darf weiter nicht bearbeiten'), n(MEMBER2, f"update characters set short='m2' where id='{C2}'") in ('0', 'ERR'))
+    check(T('Rechte: Fremder darf weiter nichts'), n(STRANGER, f"update characters set short='f' where id='{C2}'") in ('0', 'ERR'))
+    # Notizzettel
+    ok, out, err = psql(db, f"insert into character_notes (board_id, character_id, kind, body) values ('{bid}', '{C1}', 'guess', 'Er ist der Verräter') returning author_name || '|' || (author_id = '{VISITOR}')::text;", VISITOR, 'authenticated')
+    check(T('Notiz: Bearbeiter heftet Vermutung an (Verfasser vom Server)'), ok and out == 'visitor|true', err or out)
+    ok, out, err = psql(db, f"insert into character_notes (board_id, character_id, kind, body) values ('{bid}', '{C1}', 'decision', 'Wir vertrauen ihm nicht') returning author_name;", OWNER, 'authenticated')
+    check(T('Notiz: Ersteller heftet Gruppenentscheidung an'), ok and out == 'Owner', err or out)
+    check(T('Notiz: Verfasser nicht fälschbar'), cnt(VISITOR, f"insert into character_notes (board_id, character_id, body, author_name) values ('{bid}', '{C1}', 'x', 'Owner');") == 'ERR')
+    check(T('Notiz: Zeitpunkt nicht fälschbar'), cnt(VISITOR, f"insert into character_notes (board_id, character_id, body, created_at) values ('{bid}', '{C1}', 'x', '2000-01-01');") == 'ERR')
+    for name, body, kind in [('leerer Text', "'   '", "'note'"), ('Text über 280 Zeichen', "repeat('a', 281)", "'note'"), ('unbekannte Art', "'x'", "'hack'")]:
+        check(T(f'Notiz: abgelehnt ({name})'), cnt(VISITOR, f"insert into character_notes (board_id, character_id, kind, body) values ('{bid}', '{C1}', {kind}, {body});") == 'ERR')
+    check(T('Notiz: 280 Zeichen und Japanisch erlaubt'), cnt(VISITOR, f"insert into character_notes (board_id, character_id, body) values ('{bid}', '{C1}', repeat('あ', 280));") != 'ERR')
+    check(T('Notiz: 4. Zettel erlaubt'), cnt(VISITOR, f"insert into character_notes (board_id, character_id, body) values ('{bid}', '{C1}', 'vier');") != 'ERR')
+    ok, _, err = psql(db, f"insert into character_notes (board_id, character_id, body) values ('{bid}', '{C1}', 'fünf');", VISITOR, 'authenticated')
+    check(T('Notiz: 5. Zettel abgelehnt (höchstens 4)'), not ok and 'limit_notes' in err, err)
+    check(T('Notiz: anderer Charakter hat eigene 4'), cnt(VISITOR, f"insert into character_notes (board_id, character_id, body) values ('{bid}', '{C2}', 'C2');") != 'ERR')
+    check(T('Notiz: Mitglied ohne Recht sieht Notizen'), cnt(MEMBER2, 'select count(*) from character_notes;') == '5')
+    check(T('Notiz: Mitglied ohne Recht kann nicht entfernen'), n(MEMBER2, 'delete from character_notes') in ('0', 'ERR'))
+    check(T('Notiz: Mitglied ohne Recht kann nicht anheften'), cnt(MEMBER2, f"insert into character_notes (board_id, character_id, body) values ('{bid}', '{C2}', 'x');") == 'ERR')
+    check(T('Notiz: Fremder sieht keine Notizen'), cnt(STRANGER, 'select count(*) from character_notes;') == '0')
+    check(T('Notiz: nicht änderbar (nur anheften/entfernen)'), cnt(OWNER, "update character_notes set body='geändert';") == 'ERR')
+    check(T('Notiz: nicht an Charakter eines fremden Boards'), cnt(VISITOR, f"insert into character_notes (board_id, character_id, body) values (gen_random_uuid(), '{C1}', 'x');") == 'ERR')
+    check(T('Notiz: Bearbeiter entfernt eine Notiz'), n(VISITOR, f"delete from character_notes where body='vier'") == '1')
+    check(T('Notiz: Ersteller entfernt eine Notiz'), n(OWNER, "delete from character_notes where kind='decision'") == '1')
+    # Recht wieder entziehen
+    check(T('Rechte: Ersteller entzieht Bearbeitungsrecht'), n(OWNER, f"update board_visits set can_edit=false where board_id='{bid}' and user_id='{VISITOR}'") == '1')
+    check(T('Rechte: danach wieder nur ansehen'), n(VISITOR, f"update characters set short='x' where id='{C2}'") in ('0', 'ERR')
+          and n(VISITOR, 'delete from character_notes') in ('0', 'ERR')
+          and cnt(VISITOR, f"insert into storage.objects (bucket_id, name) values ('board-images', '{bid}/p-z.jpg');") == 'ERR')
+    # Alle Mitglieder dürfen bearbeiten
+    check(T('Rechte: Ersteller schaltet „Alle Mitglieder dürfen bearbeiten“ ein'), n(OWNER, f"update boards set members_can_edit=true where id='{bid}'") == '1')
+    check(T('Rechte: alle Mitglieder dürfen jetzt bearbeiten'), n(VISITOR, f"update characters set short='alle' where id='{C2}'") == '1'
+          and n(MEMBER2, f"update characters set short='alle2' where id='{C2}'") == '1')
+    check(T('Rechte: Mitglied sieht die Einstellung'), cnt(MEMBER2, f"select members_can_edit from boards where id='{bid}';") == 't')
+    check(T('Rechte: Fremder darf trotzdem nichts'), n(STRANGER, f"update characters set short='f' where id='{C2}'") in ('0', 'ERR')
+          and cnt(STRANGER, f"insert into character_notes (board_id, character_id, body) values ('{bid}', '{C2}', 'x');") == 'ERR')
+    check(T('Rechte: „Alle“ wieder aus'), n(OWNER, f"update boards set members_can_edit=false where id='{bid}'") == '1'
+          and n(MEMBER2, f"update characters set short='m' where id='{C2}'") in ('0', 'ERR'))
+    # Notiz verschwindet mit dem Charakter; Aufräumen
+    check(T('Notiz: an neuen Charakter angeheftet'), n(OWNER, f"insert into character_notes (board_id, character_id, body) select '{bid}', id, 'mit weg' from characters where name='Neu vom Mitglied'") == '1')
+    check(T('Notiz: wird mit dem Charakter gelöscht'), n(OWNER, "delete from characters where name='Neu vom Mitglied'") == '1'
+          and psql(db, "select count(*) from character_notes where body='mit weg';")[1] == '0')
+    psql(db, f"delete from links where short='m'; delete from factions where name='MF'; delete from character_factions where character_id='{C2}';"
+             f"delete from board_visits where user_id='{MEMBER2}'; update characters set short='' where id='{C2}';")
+    psql(db, 'delete from character_notes;')
 
 
 def main():

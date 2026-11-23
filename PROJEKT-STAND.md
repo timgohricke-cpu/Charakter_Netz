@@ -1,4 +1,4 @@
-# Charakter-Netz – Projektstand (Version 2.10)
+# Charakter-Netz – Projektstand (Version 2.11)
 
 Diese Datei beschreibt den aktuellen Stand, damit die Arbeit in einem neuen Chat nahtlos weitergehen kann.
 **Hier stehen keine Passwörter oder geheimen Schlüssel – und das soll so bleiben (das Repo ist öffentlich).**
@@ -24,9 +24,9 @@ Statische PWA ohne Build-Schritt und ohne externe Bibliotheken zur Laufzeit, geh
 |---|---|
 | `index.html` | Grundgerüst, **Content-Security-Policy** (erlaubt nur die eigene Seite + `https://cecddgekcowcxripwxzi.supabase.co`) |
 | `config.js` | Supabase-URL, öffentlicher *publishable key*, `EMAIL_DOMAIN` |
-| `app.js` | Gesamte App (ca. 1600 Zeilen, ein IIFE, kein Framework) |
+| `app.js` | Gesamte App (ca. 2600 Zeilen, ein IIFE, kein Framework) |
 | `style.css` | Design inkl. Hell-/Dunkelmodus über CSS-Variablen (`:root` / `:root[data-theme=light]`) |
-| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v10`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.10) |
+| `sw.js` | Service Worker, Cache-Name **`charakter-netz-v11`** – bei jeder Änderung an App-Dateien hochzählen (zusammen mit `APP_VERSION` in `app.js`, aktuell 2.11) |
 | `vendor/supabase.js` | `@supabase/supabase-js` 2.119.2, lokal mit esbuild gebündelt (IIFE, global `supabase`) |
 | `supabase/schema.sql` | Komplettes Datenbank-Skript; **idempotent** (kann jederzeit erneut ausgeführt werden) |
 | `manifest.webmanifest`, Icons | Installation als App |
@@ -40,16 +40,18 @@ npx esbuild entry.js --bundle --minify --format=iife --global-name=supabase --ta
 
 ### Datenbank (Supabase / Postgres)
 - `profiles` (id = auth.users.id, `username`, eindeutig über `lower(username)`), wird per Trigger beim Registrieren angelegt
-- `boards` (owner_id, name, map_path/map_w/map_h, **cover_path** (Titelbild, seit 2.10; Prüfregel: nur `<board-id>/cover-<uuid>.jpg`), **share_token** – nur über Funktion lesbar)
+- `boards` (owner_id, name, map_path/map_w/map_h, **members_can_edit** („Alle Mitglieder dürfen bearbeiten“, seit 2.11), **cover_path** (Titelbild, seit 2.10; Prüfregel: nur `<board-id>/cover-<uuid>.jpg`), **share_token** – nur über Funktion lesbar)
 - `characters` (name, short, info, place, image_path, x, y, map_x, map_y, **dead**)
 - `links` (a, b, short, long) – beide Charaktere müssen zum selben Board gehören
 - `factions` (name, color `#rrggbb`) und `character_factions` (Zuordnung, mehrere je Charakter, `position` = Reihenfolge)
-- `board_visits` (wer hat welches geteilte Board besucht → „Mit mir geteilt“)
+- `board_visits` (wer hat welches geteilte Board besucht → „Mit mir geteilt“; **can_edit** = Bearbeitungsrecht dieses Mitglieds, seit 2.11 – ändert nur der Ersteller, Trigger `protect_visits`)
+- `character_notes` (seit 2.11: Notizzettel – character_id, kind `note`/`guess`/`decision`, body 1–280 Zeichen, author_id/author_name/created_at setzt der Trigger `set_note_author`, höchstens **4 je Charakter** (`limit_notes`); nur anheften/entfernen, kein Ändern)
 - Funktionen (API): `open_shared_board(board, token)`, `get_share_token`, `reset_share_link(board, remove_visitors)`, `transfer_board_owner(board, new_owner)` (seit 2.8), `delete_my_account` – prüfen selbst, wer angemeldet ist. Der Supabase Security Advisor meldet für diese **5** „Signed-In Users Can Execute SECURITY DEFINER Function“: **gewollt**, die App ruft sie auf.
 - Besitzer (`owner_id`) ist für niemanden direkt änderbar (keine Spalten-Berechtigung + Trigger `protect_columns`); nur `transfer_board_owner` setzt dafür kurz `cn.transfer` (wie `cn.rotate` beim Link erneuern)
-- Hilfsfunktionen für die Rechte-Regeln liegen im Schema **`private`** (nicht über die API erreichbar): `private.is_board_owner`, `can_read_board`, `can_see_profile`, `board_id_from_path`, `board_image_quota_ok`
+- Hilfsfunktionen für die Rechte-Regeln liegen im Schema **`private`** (nicht über die API erreichbar): `private.is_board_owner`, `can_read_board`, **`can_edit_board`** (Ersteller oder Mitglied mit `can_edit`/`members_can_edit`, seit 2.11), **`can_write_image`** (Bilder: Ersteller alles, Bearbeiter alles außer `cover-…`), `can_see_profile`, `board_id_from_path`, `board_image_quota_ok`
+- Bearbeiter (seit 2.11): `characters`, `links`, `factions`, `character_factions`, `character_notes` und Bilder über `can_edit_board`; `boards` ändern dürfen sie nur bei Inhaltsspalten (Weltkarte) – Name, Titelbild und `members_can_edit` schützt `protect_columns` (`not_owner`). Teilen, Link erneuern, Mitglieder entfernen, Ersteller übertragen, Board löschen: nur Ersteller.
 - Storage-Bucket `board-images` (privat), Pfad `<board-id>/<datei>.jpg`, Auslieferung über signierte URLs (1 h)
-- Grenzen: 200 Boards/Konto, 2000 Charaktere, 10 000 Verbindungen, 50 Fraktionen je Board, 10 Fraktionen je Charakter, 3000 Bilder je Board (`board_image_quota_ok`)
+- Grenzen: 200 Boards/Konto, 2000 Charaktere, 10 000 Verbindungen, 50 Fraktionen je Board, 10 Fraktionen je Charakter, 4 Notizzettel je Charakter (je ≤ 280 Zeichen), 3000 Bilder je Board (`board_image_quota_ok`)
 - Ändern ist nur bei Inhaltsspalten erlaubt (spaltenweise `grant update`); ID, Board und Zeitstempel sind fest
 - Trigger `cn_protect_email` auf `auth.users`: Die Anmelde-Adresse kann nachträglich nicht geändert werden
 
@@ -68,12 +70,13 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 **Titelbild (seit 2.10):** Auf der eigenen Board-Karte „🖼 Titelbild“ → Bild wählen (wird auf max. 1600 px verkleinert, als JPEG neu kodiert, Datei `<board-id>/cover-<uuid>.jpg`), ersetzen oder entfernen (alte Datei wird gelöscht). Erscheint oben auf der Board-Karte (16:9) – auch bei Besuchern unter „Mit mir geteilt“. Export/Import enthalten das Titelbild.
 **Dialoge sperren den Hintergrund (seit 2.10):** Solange ein Dialog offen ist (`html.modal-open`), scrollt/zoomt nichts dahinter; Dialog-Inhalt und Vorschlagslisten reichen das Wischen nicht an den Hintergrund weiter (`overscroll-behavior: contain`); Viewport `interactive-widget=resizes-content` (Tastatur verschiebt die Seite nicht).
 **Handy-Größen (seit 2.10, ≤ 720 px oder Touch ≤ 1024 px):** Grundschrift 16 px, Eingabefelder 16 px (das iPhone zoomt sonst beim Antippen heran), Knöpfe mindestens 38–42 px hoch; Netz startet auf dem Handy mit Zoom ≥ 0,6 um den Charakter mit den meisten Verbindungen (statt alles winzig einzupassen, „Alles zeigen“ passt weiterhin alles ein), Namen auf dem Handy mindestens ca. 12 px.
-**Startseite:** „Meine Boards“ (Teilen, Titelbild, Umbenennen, Exportieren, Löschen), „Mit mir geteilt“ (nur ansehen, aus Liste entfernen), Import, Banner zur Übernahme lokaler V1-Boards.
+**Startseite:** „Meine Boards“ (Teilen, Titelbild, Umbenennen, Exportieren, Löschen), „Mit mir geteilt“ („nur ansehen“ bzw. „✏️ darf bearbeiten“, aus Liste entfernen), Import, Banner zur Übernahme lokaler V1-Boards.
 **Ersteller übertragen (seit 2.8, nur Ersteller):** Im Teilen-Dialog unter „Mitglieder – wer hat Zugriff?“ steht oben man selbst („👑 Ersteller (du)“), darunter jeder Besucher mit Knopf „👑 Zum Ersteller machen“. Rückfrage mit Häkchen „Ich habe verstanden …“ (erst dann klickbar), „Abbrechen“ führt zurück zum Teilen-Dialog. Der neue Ersteller muss das Board schon über den Link geöffnet haben (steht in `board_visits`). Danach: neuer Ersteller kann alles (bearbeiten, teilen, Bilder, löschen) und steht nicht mehr in der Besucherliste; der bisherige Ersteller wird Besucher (Nur-Lesen, „Mit mir geteilt“) und kann es nicht selbst zurückholen. Bilder, Freigabe-Link und übrige Besucher bleiben. Der Server prüft alles (`transfer_board_owner`): Fehler `not_owner`, `invalid_new_owner`, `new_owner_no_access`, `limit_boards_new_owner` (200 Boards) → deutsche Meldungen.
 **Teilen / Einladen (nur Ersteller):** Knopf „📤 Board teilen“ in der Kopfleiste und „📤 Einladen“ auf der Board-Karte. Dialog mit „Teilen …“ (Teilen-Menü des Geräts: WhatsApp, Discord, Telegram, Mail … – `navigator.share`) und direkten Knöpfen WhatsApp, Telegram, Discord (Link kopieren + Discord öffnen, Discord hat keinen Teilen-Link), E-Mail, SMS (nur Handy), Link kopieren; Besucherliste; Link erneuern (optional alle Besucher entfernen). Besucher sehen keinen Teilen-Knopf, der Server gibt den Schlüssel nur dem Ersteller.
 **App weiterempfehlen (alle):** 📣 in der Kopfleiste (Startseite und Anmeldeseite) teilt nur den Link zur App, ohne Board.
 **Update-Hinweis:** erscheint nur, wenn auf dem Server wirklich eine andere `APP_VERSION` liegt.
-**Rechte:** Nur der Ersteller bearbeitet; Besucher sehen alles im Nur-Lesen-Modus (Hinweis „👁 Nur ansehen · von …“). Durchgesetzt per Row Level Security auf dem Server.
+**Rechte (seit 2.11 mit Bearbeitungsrechten):** Neue Mitglieder sehen ein Board nur an („👁 Nur ansehen · von …“). Der Ersteller kann im Teilen-Dialog unter „Mitglieder – wer hat Zugriff?“ **„✏️ Alle Mitglieder dürfen bearbeiten“** einschalten (gilt auch für künftige Mitglieder) oder **je Mitglied „✏️ Bearbeiten“** an-/ausschalten. Bearbeiter (Kopfleiste „✏️ Bearbeiten · von …“, auf der Startseite „✏️ darf bearbeiten“) können Charaktere, Verbindungen, Fraktionen, Bilder, Weltkarte, Anordnen und Notizzettel bearbeiten – Teilen/Einladen, Umbenennen, Titelbild, Mitglieder verwalten, Ersteller übertragen und Löschen bleiben beim Ersteller. In `app.js`: `isOwner()` (Ersteller) und `canEdit()` (Ersteller oder Bearbeiter). Durchgesetzt per Row Level Security auf dem Server.
+**Notizzettel (seit 2.11):** In der Infokarte eines Charakters Abschnitt „📝 Notizzettel (n/4)“: „+ Zettel anheften“ (Art 💭 Vermutung / ✅ Entscheidung / 📝 Notiz, Text bis 280 Zeichen mit Zähler), jeder Zettel zeigt Art, Text, Verfasser und Datum; „✕“ → „Entfernen?“ → entfernt (zwei Klicks). Höchstens 4 je Charakter. Im Netz hängen die Zettel oben rechts am Kreis (2 × 2, leicht schräg, Pinnnadel, Farbe je Art, Text auf 3 Zeilen gekürzt); Antippen/Enter öffnet den Zettel (mit „Zum Charakter“); sie wandern beim Verschieben mit, werden bei der Auswahl mit abgeblendet, aus der Ferne nur als farbige Zettel ohne Text gezeigt; Linienbeschriftungen und Namen unter Zetteln werden ausgeblendet; „Alles zeigen“ passt die Zettel mit ein. Schalter „📝 Zettel“ (nur wenn es Zettel gibt; an/aus gemerkt: `localStorage cn-notes`). Anheften/Entfernen: Ersteller und Bearbeiter; sehen: alle Mitglieder. Export/Import enthalten die Zettel (beim Import wird man selbst Verfasser).
 **Charakternetz:** Linien leicht gebogen (Bogen ≤ 36 px), in der Farbe der gemeinsamen Fraktion (sonst grau); Linienbeschriftung rückt zum weniger verbundenen Ende (64 %); Kreise frei setzen (Modus „＋ Charakter“), ziehen, verbinden (Modus „🔗 Verbinden“), Linienbeschriftung (Kurzbeschreibung) über den Kreisen, Klick → Infokarte bzw. lange Beschreibung; Zoom (Mausrad, Pinch), „Alles zeigen“.
 **Fraktionen:** keine, eine oder mehrere je Charakter; Eingabe mit Vorschlägen und „+ Neue Fraktion anlegen“ (Vorschlag wird erst beim Antippen/Klicken gewählt, nicht schon beim Berühren – die Liste lässt sich auf dem Handy wischen; seit 2.9); Rand und Name in Farbabschnitten; ohne Fraktion neutral (dunkel: weiß); Verwaltung über „🎨 Fraktionen“ (Farbe, Name, Löschen); Legende oben rechts (Fraktion anklicken = nur ihre Mitglieder zeigen, erneut klicken = aufheben).
 **Verstorben:** behalten ihre Fraktionsfarben, werden aber verblasst/halbdurchsichtig dargestellt (Netz: Deckkraft 0,5; Karte, Tabelle, Infokarte ebenso), „†“ hinter dem Namen, Bild schwarz-weiß. Legende: „Verstorben † (verblasst)“.
@@ -108,7 +111,7 @@ Ohne gültiges Token kein Zugriff. „Neuen Link erzeugen“ macht den alten ung
 
 ## Tests
 **`bash tests/run_all.sh`** – statische Prüfungen, Datenbank (lokales Postgres, frisch + Upgrade + doppelt) und Oberfläche (Chrome headless mit nachgebautem Supabase). Am Ende muss „ALLE TESTS BESTANDEN“ stehen. Details und Live-Prüfliste: `tests/README.md`.
-Stand 22.11.2026 (Version 2.10): 24 statische + 438 Datenbank- + 202 Oberflächen-Prüfungen (664), alle bestanden.
+Stand 23.11.2026 (Version 2.11): 28 statische + 880 Datenbank- + 287 Oberflächen-Prüfungen (1195), alle bestanden.
 
 ## Testboards
 - `tests/data/silber.json` (erzeugt von `tests/data/make_silber.py`): „Silber – Die Trilogie der Träume“ (Kerstin Gier), Stand Ende Band 3: 81 Charaktere (auch Nebenfiguren ohne Verbindung, z. B. Lehrkräfte), 167 Verbindungen (feste Fakten wie Familie bleiben, Beziehungen zeigen den letzten Stand, Verlauf in der langen Beschreibung), 15 Fraktionen, viele Mehrfach-Fraktionen – über „Importieren“ in ein Konto laden (liegt im Konto test_ersteller). Gedacht für „✨ Anordnen“/Inseln und als Board für „Ersteller übertragen“ (test_ersteller → test_besucher und zurück). Nebenfiguren, über die die Quellen wenig sagen, sind ausdrücklich so beschrieben.

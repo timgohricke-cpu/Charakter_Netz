@@ -63,6 +63,21 @@ check('schema.sql: Policies/Trigger vorher mit "drop … if exists"', not pol)
 rpcs = set(re.findall(r"sb\.rpc\('(\w+)'", app))
 missing = [f for f in rpcs if not re.search(rf'create or replace function public\.{f}\(', schema)]
 check(f'Alle {len(rpcs)} von der App aufgerufenen Server-Funktionen stehen in schema.sql', rpcs and not missing, missing)
+# Jede Tabelle, die die App anspricht, steht in schema.sql (seit 2.11: character_notes)
+tables = set(re.findall(r"sb\.from\('(\w+)'\)", app))
+missing = [t for t in tables if not re.search(rf'create table if not exists public\.{t} \(', schema)]
+check(f'Alle {len(tables)} von der App benutzten Tabellen stehen in schema.sql', tables and 'character_notes' in tables and not missing, missing)
+# Spalten, die die App liest, sind in schema.sql zum Lesen freigegeben (boards hat spaltenweise Rechte)
+bcols = re.search(r"const BOARD_COLS = '([^']+)'", app).group(1).split(',')
+bgrant = re.search(r'grant select \(([^)]+)\) on public\.boards to authenticated', schema)
+check('BOARD_COLS (app.js) sind in schema.sql lesbar freigegeben', bool(bgrant) and set(bcols) <= {x.strip() for x in bgrant.group(1).split(',')}, bcols)
+# Notizzettel: Höchstzahl und Länge in App und Datenbank gleich
+nmax = re.search(r'const NOTE_MAX = (\d+), NOTE_LEN = (\d+);', app)
+check('Notizzettel: Höchstzahl/Länge app.js == schema.sql', bool(nmax)
+      and f"where character_id = new.character_id) >= {nmax.group(1)} then\n      raise exception 'limit_notes'" in schema
+      and f'char_length(body) between 1 and {nmax.group(2)}' in schema, nmax and nmax.groups())
+# Rechte: Teilen/Einladen bleibt beim Ersteller (isOwner), Bearbeiten über canEdit
+check('Teilen-Knopf nur für den Ersteller (isOwner), nicht für Bearbeiter', "isOwner() ? el('button', { class: 'btn small primary share-btn'" in app)
 # Testboard „Silber“ (tests/data) ist gültig und entspricht dem Generator
 import json, subprocess
 sj = os.path.join(ROOT, 'tests', 'data', 'silber.json')

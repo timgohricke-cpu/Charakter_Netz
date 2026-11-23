@@ -2,14 +2,16 @@
 // Daten: Board 25fe99f5… von test_ersteller (31 Charaktere c0–c29 + cj1, 30 Verbindungen, Fraktionen Nordreich (c0, c1, c10)
 // und Ostlande (c4, c10, c11; c10 hat beide), Figur 4 verstorben, 5 Pins, Karte), fremdes Board bbbbbbbb… von 山田太郎 (Besucher-Sicht),
 // Besucher des eigenen Boards: test_besucher (u-vis) und さくら (u-jp) – für „Ersteller übertragen“. window.__transferFail = 'code' -> Fehler.
+// Seit 2.11: Tabelle character_notes (Notizzettel, Verfasser setzt der „Server“ = test_ersteller, höchstens 4 je Charakter -> limit_notes),
+// boards.members_can_edit, board_visits.can_edit (Bearbeitungsrechte).
 // Steuerung: localStorage mock-out=1 -> abgemeldet; window.__delay = ms -> jede Anfrage verzögern (langsames Netz). Protokolle: window.__calls, window.__auth, window.__signs.
 (() => {
   const OWNER = 'u-owner', BID = '25fe99f5-5b14-4518-94f2-9e278df9c4a9';
   const db = window.__db = {
     profiles: [{ id: OWNER, username: 'test_ersteller' }, { id: 'u-other', username: '山田太郎' }, { id: 'u-vis', username: 'test_besucher' }, { id: 'u-jp', username: 'さくら' }],
-    boards: [{ id: BID, owner_id: OWNER, name: 'Testprojekt', map_path: BID + '/map-1.jpg', map_w: 800, map_h: 500, created_at: '2026-01-01', updated_at: '2026-01-02' },
-      { id: 'bbbbbbbb-0000-4000-8000-000000000002', owner_id: 'u-other', name: '東京の物語', map_path: null, created_at: '2026-01-01', updated_at: '2026-01-02' }],
-    characters: [], links: [], factions: [{ id: 'f1', board_id: BID, name: 'Nordreich', color: '#e74c3c' }, { id: 'f2', board_id: BID, name: 'Ostlande', color: '#3498db' }], character_factions: [], board_visits: [],
+    boards: [{ id: BID, owner_id: OWNER, name: 'Testprojekt', map_path: BID + '/map-1.jpg', map_w: 800, map_h: 500, members_can_edit: false, created_at: '2026-01-01', updated_at: '2026-01-02' },
+      { id: 'bbbbbbbb-0000-4000-8000-000000000002', owner_id: 'u-other', name: '東京の物語', map_path: null, members_can_edit: false, created_at: '2026-01-01', updated_at: '2026-01-02' }],
+    characters: [], links: [], factions: [{ id: 'f1', board_id: BID, name: 'Nordreich', color: '#e74c3c' }, { id: 'f2', board_id: BID, name: 'Ostlande', color: '#3498db' }], character_factions: [], board_visits: [], character_notes: [],
   };
   for (let i = 0; i < 30; i++) db.characters.push({ id: 'c' + i, board_id: BID, name: 'Figur ' + i, short: 'k' + i, info: '', place: '', image_path: i % 3 ? null : BID + '/p-' + i + '.jpg', x: (i % 6) * 150, y: Math.floor(i / 6) * 150, map_x: i < 5 ? i / 6 : null, map_y: i < 5 ? 0.5 : null, dead: i === 4 });
   for (let i = 1; i < 30; i++) db.links.push({ id: 'l' + i, board_id: BID, a: 'c0', b: 'c' + i, short: 'Rel ' + i, long: '' });
@@ -19,7 +21,7 @@
   for (const c of ['c4', 'c10', 'c11']) db.character_factions.push({ board_id: BID, character_id: c, faction_id: 'f2', position: 0 });
   db.character_factions.push({ board_id: BID, character_id: 'c1', faction_id: 'f1', position: 0 }, { board_id: BID, character_id: 'c10', faction_id: 'f1', position: 1 });
   // Mitglieder (Besucher) des eigenen Boards: test_besucher und さくら
-  db.board_visits.push({ user_id: 'u-vis', board_id: BID, visited_at: '2026-11-20T10:00:00Z' }, { user_id: 'u-jp', board_id: BID, visited_at: '2026-11-21T10:00:00Z' });
+  db.board_visits.push({ user_id: 'u-vis', board_id: BID, visited_at: '2026-11-20T10:00:00Z', can_edit: false }, { user_id: 'u-jp', board_id: BID, visited_at: '2026-11-21T10:00:00Z', can_edit: false });
   window.__calls = []; window.__signs = 0;
   // Spalten auf oberster Ebene trennen (Klammern von Einbettungen beachten)
   const splitTop = (cols) => { const out = []; let d = 0, cur = ''; for (const ch of cols) { if (ch === '(') d++; if (ch === ')') d--; if (ch === ',' && !d) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out.map((c) => c.trim()).filter(Boolean); };
@@ -58,6 +60,13 @@
     run() {
       window.__calls.push([this.op, this.t, this.patch || this.rows || null]);
       const tab = db[this.t]; const m = (r) => this.f.every((f) => f(r));
+      if (this.op === 'insert' && this.t === 'character_notes') { // wie Trigger set_note_author + Grenze in enforce_limits
+        for (const r of this.rows) {
+          if (tab.filter((x) => x.character_id === r.character_id).length + this.rows.filter((x) => x !== r && x.character_id === r.character_id && this.rows.indexOf(x) < this.rows.indexOf(r)).length >= 4) return { data: null, error: { message: 'limit_notes', code: 'P0001' } };
+        }
+        const out = this.rows.map((r) => ({ id: r.id || crypto.randomUUID(), ...r, author_id: OWNER, author_name: 'test_ersteller', created_at: new Date().toISOString() }));
+        tab.push(...out); return { data: out.map((r) => ({ id: r.id })), error: null };
+      }
       if (this.op === 'insert') { const out = this.rows.map((r) => ({ id: r.id || crypto.randomUUID(), owner_id: OWNER, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...r })); tab.push(...out); return { data: out.map((r) => ({ id: r.id })), error: null }; }
       if (this.op === 'update') { const hit = tab.filter(m); hit.forEach((r) => Object.assign(r, this.patch)); return { data: hit.map((r) => ({ id: r.id })), error: null }; }
       if (this.op === 'delete') { const hit = tab.filter(m); db[this.t] = tab.filter((r) => !m(r)); return { data: hit.map((r) => ({ id: r.id })), error: null }; }

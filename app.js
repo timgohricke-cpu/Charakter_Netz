@@ -26,14 +26,18 @@
   const SB_KEY = String(CFG.SUPABASE_KEY || '');
   const EMAIL_DOMAIN = String(CFG.EMAIL_DOMAIN || 'users.charakter-netz.app');
   const BUCKET = 'board-images';
-  const APP_VERSION = '2.10'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
+  const APP_VERSION = '2.11'; // bei jeder Veröffentlichung zusammen mit dem Cache-Namen in sw.js erhöhen
   const CONFIGURED = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(SB_URL) && SB_KEY.length > 20 && !!window.supabase;
   // Benutzernamen: 2–24 Zeichen, Buchstaben/Ziffern . _ - sowie Japanisch (Hiragana, Katakana, Kanji).
   // Muss zu private.cn_username_ok() in supabase/schema.sql passen.
   const USERNAME_RE = /^[A-Za-z0-9_.\-\u3005-\u3007\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FC-\u30FF\u3400-\u4DBF\u4E00-\u9FFF]{2,24}$/;
   const normUser = (s) => String(s || '').trim().normalize('NFKC');
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const BOARD_COLS = 'id,owner_id,name,map_path,map_w,map_h,cover_path,created_at,updated_at';
+  const BOARD_COLS = 'id,owner_id,name,map_path,map_w,map_h,cover_path,members_can_edit,created_at,updated_at';
+  const NOTE_COLS = 'id,character_id,kind,body,author_id,author_name,created_at';
+  // Notizzettel an Charakteren (seit 2.11): höchstens 4 je Charakter, je bis 280 Zeichen
+  const NOTE_MAX = 4, NOTE_LEN = 280;
+  const NOTE_KINDS = { note: { icon: '📝', label: 'Notiz' }, guess: { icon: '💭', label: 'Vermutung' }, decision: { icon: '✅', label: 'Entscheidung' } };
   const CHAR_COLS = 'id,name,short,info,place,image_path,x,y,map_x,map_y,dead';
   const FACTION_COLS = 'id,name,color';
   const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -225,6 +229,7 @@
     if (/limit_boards/.test(m)) return 'Du hast die Höchstzahl von 200 Boards erreicht.';
     if (/limit_characters/.test(m)) return 'Dieses Board hat die Höchstzahl von 2000 Charakteren erreicht.';
     if (/limit_factions/.test(m)) return 'Ein Board kann höchstens 50 Fraktionen haben.';
+    if (/limit_notes/.test(m)) return `An einem Charakter können höchstens ${NOTE_MAX} Notizzettel hängen.`;
     if (/limit_links/.test(m)) return 'Dieses Board hat die Höchstzahl von 10 000 Verbindungen erreicht.';
     if (/Payload too large|exceeded the maximum|too large/i.test(m)) return 'Die Datei ist zu groß.';
     if (/mime type|not supported/i.test(m)) return 'Dieses Dateiformat wird nicht unterstützt.';
@@ -316,21 +321,25 @@
   const charFromRow = (r) => ({
     id: r.id, name: r.name, short: r.short, info: r.info, place: r.place, imagePath: r.image_path, image: null,
     x: r.x, y: r.y, mapPos: r.map_x != null && r.map_y != null ? { x: r.map_x, y: r.map_y } : null,
-    factionIds: [], dead: !!r.dead,
+    factionIds: [], dead: !!r.dead, notes: [],
   });
+  const noteFromRow = (r) => ({ id: r.id, kind: NOTE_KINDS[r.kind] ? r.kind : 'note', body: r.body, authorId: r.author_id, authorName: r.author_name || '', created: r.created_at });
 
   // Ein Board komplett vom Server laden (optional mit Bildadressen)
   async function loadBoard(bid, withUrls = true) {
-    const [b, chars, links, factions, cf] = await Promise.all([
+    const [b, chars, links, factions, cf, notes, visit] = await Promise.all([
       q(sb.from('boards').select(BOARD_COLS).eq('id', bid).maybeSingle()),
       fetchAll('characters', CHAR_COLS, bid),
       fetchAll('links', LINK_COLS, bid),
       fetchAll('factions', FACTION_COLS, bid),
       fetchAll('character_factions', 'character_id,faction_id,position', bid, ['character_id', 'faction_id']),
+      fetchAll('character_notes', NOTE_COLS, bid, ['created_at', 'id']),
+      me ? q(sb.from('board_visits').select('can_edit').eq('board_id', bid).eq('user_id', me.id).maybeSingle()).catch(() => null) : null,
     ]);
     if (!b) return null;
     const out = {
       id: b.id, name: b.name, ownerId: b.owner_id, ownerName: '', created: b.created_at, updated: b.updated_at,
+      membersCanEdit: !!b.members_can_edit, myCanEdit: !!(visit && visit.can_edit),
       map: b.map_path ? { path: b.map_path, w: b.map_w || 1000, h: b.map_h || 500, src: null } : null,
       coverPath: b.cover_path || null,
       characters: chars.map(charFromRow),
@@ -340,6 +349,8 @@
     const cmap = new Map(out.characters.map((c) => [c.id, c]));
     cf.sort((x, y) => x.position - y.position);
     for (const r of cf) { const c = cmap.get(r.character_id); if (c && out.factions.some((f) => f.id === r.faction_id)) c.factionIds.push(r.faction_id); }
+    notes.sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
+    for (const r of notes) { const c = cmap.get(r.character_id); if (c && c.notes.length < NOTE_MAX) c.notes.push(noteFromRow(r)); }
     if (withUrls) {
       const get = await signUrls([out.map && out.map.path, ...out.characters.map((c) => c.imagePath)]);
       if (out.map) out.map.src = get(out.map.path);
@@ -521,13 +532,16 @@
     return focusStates.get(bid);
   }
 
-  // Rechte: Nur der Ersteller darf bearbeiten. Der Server prüft das zusätzlich per Row Level Security.
-  const canEdit = () => !!(board && me && board.ownerId === me.id);
+  // Rechte: Der Ersteller darf alles. Mitglieder dürfen Inhalte bearbeiten, wenn der Ersteller es ihnen erlaubt hat
+  // (einzeln oder „Alle Mitglieder dürfen bearbeiten“). Teilen, Umbenennen, Titelbild und Löschen bleiben beim Ersteller.
+  // Der Server prüft das zusätzlich per Row Level Security.
+  const isOwner = () => !!(board && me && board.ownerId === me.id);
+  const canEdit = () => isOwner() || !!(board && me && (board.membersCanEdit || board.myCanEdit));
 
   const byId = (id) => board.characters.find((c) => c.id === id);
   const byLink = (id) => board.links.find((l) => l.id === id);
   const byFaction = (id) => (id ? board.factions.find((f) => f.id === id) : null);
-  const newChar = (x, y) => ({ id: uid(), name: '', short: '', info: '', image: null, imagePath: null, place: '', x, y, mapPos: null, factionIds: [], dead: false });
+  const newChar = (x, y) => ({ id: uid(), name: '', short: '', info: '', image: null, imagePath: null, place: '', x, y, mapPos: null, factionIds: [], dead: false, notes: [] });
   const factionsOf = (c) => (c.factionIds || []).map(byFaction).filter(Boolean);
   // Farben eines Charakters: die Farben seiner Fraktionen (keine = neutral). Verstorbene behalten ihre Farben
   // und werden über die Klasse „dead“ verblasst/halbdurchsichtig dargestellt.
@@ -589,8 +603,8 @@
         if (seq !== routeSeq) return;
         if (!b) { toast('Board nicht gefunden oder du hast keinen Zugriff darauf.'); go(null); return; }
         board = b;
-        if (joinedNotice) { joinedNotice = false; if (!canEdit()) toast(`„${b.name}“ wurde zu „Mit mir geteilt“ hinzugefügt.`); }
-        if (!canEdit()) sb.from('board_visits').update({ visited_at: new Date().toISOString() }).eq('user_id', me.id).eq('board_id', id).then(() => {}, () => {});
+        if (joinedNotice) { joinedNotice = false; if (!isOwner()) toast(`„${b.name}“ wurde zu „Mit mir geteilt“ hinzugefügt.`); }
+        if (!isOwner()) sb.from('board_visits').update({ visited_at: new Date().toISOString() }).eq('user_id', me.id).eq('board_id', id).then(() => {}, () => {});
       }
       view = VIEWS.includes(parts[2]) ? parts[2] : 'netz';
       if (view !== 'karte' && placing) placing = null;
@@ -849,7 +863,7 @@
     try {
       [mine, shared, local] = await Promise.all([
         q(sb.from('boards').select(BOARD_COLS + ',characters(count),links(count)').eq('owner_id', me.id).order('updated_at', { ascending: false })),
-        q(sb.from('board_visits').select('board_id,visited_at,board:boards!board_visits_board_id_fkey(id,name,updated_at,cover_path,owner:profiles!boards_owner_id_fkey(username))').eq('user_id', me.id).order('visited_at', { ascending: false })),
+        q(sb.from('board_visits').select('board_id,visited_at,can_edit,board:boards!board_visits_board_id_fkey(id,name,updated_at,cover_path,members_can_edit,owner:profiles!boards_owner_id_fkey(username))').eq('user_id', me.id).order('visited_at', { ascending: false })),
         LocalDB.all(),
       ]);
     } catch (e) {
@@ -896,7 +910,7 @@
         el('button', { class: 'board-open', type: 'button', onclick: () => go(b.id, 'netz') },
           coverImg(b),
           el('h3', { text: b.name }),
-          el('p', { text: 'von ' + ((b.owner && b.owner.username) || 'unbekannt') + ' · nur ansehen' }),
+          el('p', { text: 'von ' + ((b.owner && b.owner.username) || 'unbekannt') + (v.can_edit || b.members_can_edit ? ' · ✏️ darf bearbeiten' : ' · nur ansehen') }),
           el('small', { text: 'Zuletzt besucht: ' + new Date(v.visited_at).toLocaleString('de-DE') })),
         el('div', { class: 'board-tools' },
           btn('Aus Liste entfernen', () => confirmBox('Aus der Liste entfernen?', `„${b.name}“ verschwindet aus „Mit mir geteilt“. Über den Link kannst du es später wieder öffnen.`, 'Entfernen', async () => {
@@ -918,7 +932,7 @@
         myList,
         el('div', { class: 'home-head' }, el('h1', { text: 'Mit mir geteilt' })),
         shList,
-        el('p', { class: 'note', text: 'Deine Boards werden in deinem Konto gespeichert. Nur du kannst sie bearbeiten. Wer deinen Freigabe-Link hat und angemeldet ist, kann sie ansehen.' })));
+        el('p', { class: 'note', text: 'Deine Boards werden in deinem Konto gespeichert. Wer deinen Freigabe-Link hat und angemeldet ist, kann sie ansehen. Bearbeiten dürfen nur du und Mitglieder, denen du es im Teilen-Dialog erlaubst.' })));
   }
   // Titelbild eines eigenen Boards wählen / ändern / entfernen (Datei "<board-id>/cover-<uuid>.jpg", alte Datei wird gelöscht)
   function coverDialog(b) {
@@ -1022,15 +1036,42 @@
     const inp = el('input', { type: 'text', readonly: true, value: link, 'aria-label': 'Einladungslink' });
     inp.addEventListener('focus', () => inp.select());
     const visitors = el('ul', { class: 'link-list' }, el('li', { class: 'muted', text: 'Lädt …' }));
+    // Bearbeitungsrechte (seit 2.11): für alle Mitglieder auf einmal oder je Mitglied
+    let allEdit = false;
+    try { const r = await q(sb.from('boards').select('members_can_edit').eq('id', bid).maybeSingle()); allEdit = !!(r && r.members_can_edit); } catch { /* Standard: nur ansehen */ }
+    const intro = el('p');
+    const setIntro = () => { intro.textContent = `Schicke diesen Link an Mitspieler. Wer ihn öffnet, installiert bei Bedarf die App, meldet sich an oder registriert sich – danach ist „${name}“ in seinem Konto unter „Mit mir geteilt“ (${allEdit ? 'ansehen und bearbeiten' : 'nur ansehen – Bearbeiten erlaubst du unten'}).`; };
+    setIntro();
+    const allCb = el('input', { type: 'checkbox', class: 'all-edit', checked: allEdit });
+    allCb.addEventListener('change', () => {
+      const want = allCb.checked; allCb.disabled = true;
+      q(sb.from('boards').update({ members_can_edit: want }).eq('id', bid).select('id')).then(mustAffect).then(() => {
+        allEdit = want; setIntro(); loadVisitors();
+        if (board && board.id === bid) board.membersCanEdit = want;
+        toast(want ? 'Alle Mitglieder dürfen jetzt bearbeiten.' : 'Mitglieder dürfen jetzt nur noch bearbeiten, wenn du es ihnen einzeln erlaubst.');
+      }).catch((e) => { allCb.checked = !want; toast(errMsg(e)); }).finally(() => { allCb.disabled = false; });
+    });
     const loadVisitors = async () => {
       try {
-        const v = await q(sb.from('board_visits').select('user_id,visited_at,user:profiles!board_visits_user_id_fkey(username)').eq('board_id', bid).order('visited_at', { ascending: false }));
+        const v = await q(sb.from('board_visits').select('user_id,visited_at,can_edit,user:profiles!board_visits_user_id_fkey(username)').eq('board_id', bid).order('visited_at', { ascending: false }));
         const owner = el('li', { class: 'member owner' }, el('strong', { text: me ? me.username : '?' }), el('span', { class: 'muted', text: ' · 👑 Ersteller (du)' }));
         visitors.replaceChildren(owner, ...(v.length ? v.map((x) => {
           const uname = (x.user && x.user.username) || '?';
           const tb = btn('👑 Zum Ersteller machen', () => transferDialog(bid, name, x.user_id, uname), 'ghost small transfer-btn');
           tb.setAttribute('aria-label', `${uname} zum Ersteller machen`);
-          return el('li', { class: 'member' }, el('span', { class: 'member-name' }, el('strong', { text: uname }), el('span', { class: 'muted', text: ' · Besucher seit ' + new Date(x.visited_at).toLocaleDateString('de-DE') })), tb);
+          // Bearbeiten erlauben (einzeln); bei „Alle Mitglieder dürfen bearbeiten“ immer an
+          const cb = el('input', { type: 'checkbox', checked: allEdit || !!x.can_edit, disabled: allEdit, 'aria-label': `${uname} darf bearbeiten` });
+          cb.addEventListener('change', () => {
+            const want = cb.checked; cb.disabled = true;
+            q(sb.from('board_visits').update({ can_edit: want }).eq('board_id', bid).eq('user_id', x.user_id).select('user_id')).then(mustAffect).then(() => {
+              x.can_edit = want; role.textContent = want ? ' · ✏️ darf bearbeiten' : ' · 👁 nur ansehen';
+              toast(want ? `${uname} darf jetzt bearbeiten.` : `${uname} kann jetzt nur noch ansehen.`);
+            }).catch((e) => { cb.checked = !want; toast(errMsg(e)); }).finally(() => { cb.disabled = allEdit; });
+          });
+          const role = el('span', { class: 'muted member-role', text: (allEdit || x.can_edit) ? ' · ✏️ darf bearbeiten' : ' · 👁 nur ansehen' });
+          return el('li', { class: 'member' },
+            el('span', { class: 'member-name' }, el('strong', { text: uname }), role, el('span', { class: 'muted', text: ' · seit ' + new Date(x.visited_at).toLocaleDateString('de-DE') })),
+            el('span', { class: 'member-tools' }, el('label', { class: 'check edit-toggle' + (allEdit ? ' locked' : ''), title: allEdit ? '„Alle Mitglieder dürfen bearbeiten“ ist eingeschaltet' : 'Bearbeiten erlauben' }, cb, el('span', { text: '✏️ Bearbeiten' })), tb));
         }) : [el('li', { class: 'muted', text: 'Noch niemand hat das Board über den Link geöffnet.' })]));
       } catch { visitors.replaceChildren(el('li', { class: 'muted', text: 'Konnte nicht geladen werden.' })); }
     };
@@ -1043,10 +1084,13 @@
     const r1 = btn('Neuen Link erzeugen', () => busy(r1, reset(false)).catch((e) => toast(errMsg(e))), 'ghost small');
     const r2 = btn('Neuer Link + alle Besucher entfernen', () => busy(r2, reset(true)).catch((e) => toast(errMsg(e))), 'ghost small danger');
     modal('Zum Board einladen', el('div', { class: 'form' },
-      el('p', { text: `Schicke diesen Link an Mitspieler. Wer ihn öffnet, installiert bei Bedarf die App, meldet sich an oder registriert sich – danach ist „${name}“ in seinem Konto unter „Mit mir geteilt“ (nur ansehen).` }),
+      intro,
       inp,
       shareButtons(() => ({ title: `Einladung: ${name}`, text: `Ich lade dich zu meinem Board „${name}“ in Charakter-Netz ein:`, url: link })),
-      el('fieldset', {}, el('legend', { text: 'Mitglieder – wer hat Zugriff?' }), visitors,
+      el('fieldset', {}, el('legend', { text: 'Mitglieder – wer hat Zugriff?' }),
+        el('label', { class: 'check all-edit-row' }, allCb, el('span', {}, el('strong', { text: '✏️ Alle Mitglieder dürfen bearbeiten' }),
+          el('small', { class: 'muted', text: ' – Charaktere, Verbindungen, Fraktionen, Karte und Notizzettel. Teilen, Umbenennen, Titelbild und Löschen bleiben bei dir.' }))),
+        visitors,
         el('p', { class: 'muted', text: 'Wenn der Link in falsche Hände geraten ist: Erzeuge einen neuen Link. Der alte wird sofort ungültig.' }),
         el('div', { class: 'row' }, r1, r2)))
     , [btn('Fertig', closeModal, 'primary')]);
@@ -1087,7 +1131,8 @@
     const map = b.map ? { src: await dl(b.map.path), w: b.map.w, h: b.map.h } : null;
     const cover = b.coverPath ? await dl(b.coverPath) : null;
     const characters = [];
-    for (const c of b.characters) characters.push({ id: c.id, name: c.name, short: c.short, info: c.info, image: await dl(c.imagePath), place: c.place, x: c.x, y: c.y, mapPos: c.mapPos, factions: c.factionIds, dead: c.dead });
+    for (const c of b.characters) characters.push({ id: c.id, name: c.name, short: c.short, info: c.info, image: await dl(c.imagePath), place: c.place, x: c.x, y: c.y, mapPos: c.mapPos, factions: c.factionIds, dead: c.dead,
+      notes: (c.notes || []).map((n) => ({ kind: n.kind, body: n.body, author: n.authorName, created: n.created })) });
     const out = { format: 'charakter-netz', version: 2, id: b.id, name: b.name, created: Date.parse(b.created), updated: Date.parse(b.updated), map: map && map.src ? map : null, cover: cover ? { src: cover } : null, factions: b.factions, characters, links: b.links };
     const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
     const a = el('a', { href: URL.createObjectURL(blob), download: (b.name.replace(/[^\p{L}\p{N}\-_ ]+/gu, '').trim() || 'board') + '.json' });
@@ -1120,7 +1165,9 @@
     const characters = o.characters.slice(0, 2000).map((c) => {
       const id = uid(); idMap.set(c && c.id, id);
       const mp = c && c.mapPos && Number.isFinite(c.mapPos.x) && Number.isFinite(c.mapPos.y) ? { x: clamp(c.mapPos.x, 0, 1), y: clamp(c.mapPos.y, 0, 1) } : null;
-      return { id, name: str(c && c.name, 100).trim() || 'Unbenannt', short: str(c && c.short, 300), info: str(c && c.info, 20000), image: img(c && c.image), place: str(c && c.place, 2000), x: Math.round(num(c && c.x)), y: Math.round(num(c && c.y)), mapPos: mp, factionIds: [...new Set((c && Array.isArray(c.factions) ? c.factions : (c && c.faction ? [c.faction] : [])).map((x) => fMap.get(x)).filter(Boolean))].slice(0, 10), dead: !!(c && c.dead === true) };
+      return { id, name: str(c && c.name, 100).trim() || 'Unbenannt', short: str(c && c.short, 300), info: str(c && c.info, 20000), image: img(c && c.image), place: str(c && c.place, 2000), x: Math.round(num(c && c.x)), y: Math.round(num(c && c.y)), mapPos: mp, factionIds: [...new Set((c && Array.isArray(c.factions) ? c.factions : (c && c.faction ? [c.faction] : [])).map((x) => fMap.get(x)).filter(Boolean))].slice(0, 10), dead: !!(c && c.dead === true),
+        notes: (c && Array.isArray(c.notes) ? c.notes : []).filter((n) => n && typeof n.body === 'string' && n.body.trim())
+          .slice(0, NOTE_MAX).map((n) => ({ kind: NOTE_KINDS[n.kind] ? n.kind : 'note', body: [...n.body.trim()].slice(0, NOTE_LEN).join('') })) };
     });
     const seen = new Set();
     const links = (Array.isArray(o.links) ? o.links : []).slice(0, 10000)
@@ -1171,6 +1218,9 @@
       for (const part of chunks(cfRows, 1000)) await q(sb.from('character_factions').insert(part));
       const lrows = o.links.map((l) => ({ id: l.id, board_id: bid, a: l.a, b: l.b, short: l.short, long: l.long }));
       for (const part of chunks(lrows, 1000)) await q(sb.from('links').insert(part));
+      // Notizzettel (Verfasser wird beim Import die importierende Person – setzt der Server)
+      const nrows = o.characters.flatMap((c) => (c.notes || []).map((n) => ({ board_id: bid, character_id: c.id, kind: n.kind, body: n.body })));
+      for (const part of chunks(nrows, 1000)) await q(sb.from('character_notes').insert(part));
       return bid;
     } catch (e) {
       await deleteBoardFully(bid).catch(() => {});
@@ -1232,9 +1282,11 @@
       el('header', { class: 'topbar' },
         btn('← Boards', () => go(null), 'ghost small'),
         el('h1', { class: 'board-title', text: board.name }),
-        canEdit() ? null : el('span', { class: 'badge', title: 'Du kannst dieses Board nur ansehen.', text: '👁 Nur ansehen' + (board.ownerName ? ' · von ' + board.ownerName : '') }),
+        isOwner() ? null : canEdit()
+          ? el('span', { class: 'badge badge-edit', title: 'Der Ersteller hat dir erlaubt, dieses Board zu bearbeiten.', text: '✏️ Bearbeiten' + (board.ownerName ? ' · von ' + board.ownerName : '') })
+          : el('span', { class: 'badge', title: 'Du kannst dieses Board nur ansehen.', text: '👁 Nur ansehen' + (board.ownerName ? ' · von ' + board.ownerName : '') }),
         el('div', { class: 'spacer' }),
-        canEdit() ? el('button', { class: 'btn small primary share-btn', type: 'button', title: 'Board teilen / einladen', 'aria-label': 'Board teilen', onclick: () => shareDialog(board.id, board.name) }, '📤', el('span', { class: 'lbl', text: ' Board teilen' })) : null,
+        isOwner() ? el('button', { class: 'btn small primary share-btn', type: 'button', title: 'Board teilen / einladen', 'aria-label': 'Board teilen', onclick: () => shareDialog(board.id, board.name) }, '📤', el('span', { class: 'lbl', text: ' Board teilen' })) : null,
         themeButton(), installButton()),
       el('div', { class: 'board-layout' }, nav, main));
     if (view === 'tabelle') renderTable(main);
@@ -1437,7 +1489,7 @@
             board.factions.sort(byName);
           }
           if (d._blob) { uploaded = await uploadImage(board.id, d._blob, 'p-'); path = uploaded; } else if (d._rm) path = null;
-          const rec = { id: d.id, name: d.name, short: d.short, info: d.info, place: d.place, imagePath: path, image: path ? d.image : null, x: d.x, y: d.y, mapPos: d.mapPos, factionIds: chosen.map((f) => f.id), dead: !!d.dead };
+          const rec = { id: d.id, name: d.name, short: d.short, info: d.info, place: d.place, imagePath: path, image: path ? d.image : null, x: d.x, y: d.y, mapPos: d.mapPos, factionIds: chosen.map((f) => f.id), dead: !!d.dead, notes: old ? (old.notes || []) : [] };
           const row = charRow(rec, board.id);
           if (isNew) await q(sb.from('characters').insert(row));
           else { const { id, board_id: _b, ...rest } = row; mustAffect(await q(sb.from('characters').update(rest).eq('id', id).select('id'))); }
@@ -1472,6 +1524,7 @@
           el('div', { class: 'row tags' },
             factionsOf(c).map(factionTag),
             c.dead ? paint(el('span', { class: 'tag' }, el('span', { class: 'dot' }), el('span', { text: 'Verstorben' })), DEAD_COLOR) : null))),
+      notesSection(c),
       c.info ? section('Infos', el('p', { class: 'pre', text: c.info })) : null,
       (c.place || c.mapPos) ? section('Standort',
         c.place ? el('p', { class: 'pre', text: c.place }) : null,
@@ -1500,6 +1553,87 @@
       }), 'ghost danger left'), btn('Bearbeiten', () => charForm(c, false), 'primary')]
       : [btn('Schließen', closeModal)];
     modal('Charakter', body, actions);
+  }
+
+  // ---------- Notizzettel (seit 2.11) ----------
+  // Kleine Zettel am Charakter: Vermutungen, Gruppenentscheidungen, Notizen – höchstens 4, anheften und entfernen
+  // (Ersteller und Mitglieder mit Bearbeitungsrecht). Verfasser und Zeitpunkt setzt der Server.
+  const noteDate = (n) => { const d = new Date(n.created); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('de-DE'); };
+  function stickyCard(c, n, onRemoved) {
+    const k = NOTE_KINDS[n.kind] || NOTE_KINDS.note;
+    let rm = null;
+    if (canEdit()) {
+      let armed = false;
+      rm = el('button', { type: 'button', class: 'sticky-x', 'aria-label': 'Notizzettel entfernen', title: 'Entfernen' }, '✕');
+      rm.addEventListener('click', () => {
+        if (!armed) { armed = true; rm.textContent = 'Entfernen?'; rm.classList.add('armed'); setTimeout(() => { armed = false; rm.textContent = '✕'; rm.classList.remove('armed'); }, 4000); return; }
+        busy(rm, async () => {
+          try { mustAffect(await q(sb.from('character_notes').delete().eq('id', n.id).select('id'))); } catch (e) { toast(errMsg(e)); return; }
+          c.notes = (c.notes || []).filter((x) => x.id !== n.id);
+          toast('Notizzettel entfernt.');
+          onRemoved();
+        });
+      });
+    }
+    const card = el('div', { class: 'sticky kind-' + n.kind },
+      el('div', { class: 'sticky-head' }, el('span', { class: 'sticky-kind', text: `${k.icon} ${k.label}` }), rm),
+      el('p', { class: 'sticky-body', text: n.body }),
+      el('small', { class: 'sticky-meta', text: [n.authorName && '– ' + n.authorName, noteDate(n)].filter(Boolean).join(' · ') }));
+    card.dataset.note = n.id;
+    return card;
+  }
+  function notesSection(c) {
+    const notes = c.notes || [];
+    if (!notes.length && !canEdit()) return null;
+    const after = () => { renderBoard(); charInfo(c.id); };
+    return section(`📝 Notizzettel (${notes.length}/${NOTE_MAX})`,
+      notes.length ? el('div', { class: 'sticky-list' }, notes.map((n) => stickyCard(c, n, after))) : el('p', { class: 'muted', text: 'Noch keine Zettel. Hefte Vermutungen oder Gruppenentscheidungen an – sie hängen im Netz am Charakter.' }),
+      canEdit() ? (notes.length < NOTE_MAX
+        ? btn('+ Zettel anheften', () => noteForm(c.id), 'small add-note')
+        : el('p', { class: 'muted small', text: `Höchstens ${NOTE_MAX} Zettel – entferne einen, um einen neuen anzuheften.` })) : null);
+  }
+  function noteForm(charId) {
+    const c = byId(charId);
+    if (!c || !canEdit()) return;
+    if ((c.notes || []).length >= NOTE_MAX) { toast(`An einem Charakter können höchstens ${NOTE_MAX} Notizzettel hängen.`); return; }
+    let kind = 'guess';
+    const seg = el('div', { class: 'seg note-kinds', role: 'radiogroup', 'aria-label': 'Art des Zettels' });
+    for (const [v, k] of Object.entries(NOTE_KINDS)) {
+      const b = el('button', { type: 'button', role: 'radio', 'aria-checked': String(kind === v), class: kind === v ? 'active' : '', onclick: () => {
+        kind = v;
+        for (const x of seg.children) { const a = x === b; x.classList.toggle('active', a); x.setAttribute('aria-checked', String(a)); }
+      } }, `${k.icon} ${k.label}`);
+      b.dataset.kind = v; seg.append(b);
+    }
+    const text = el('textarea', { rows: 4, maxlength: NOTE_LEN, class: 'note-text', placeholder: 'z. B. „Wir glauben, er ist der Spion“ oder „Gruppe hat beschlossen: Wir verschonen sie“' });
+    const left = el('small', { class: 'muted note-left' });
+    const upd = () => { left.textContent = `${NOTE_LEN - [...text.value].length} Zeichen übrig`; };
+    text.addEventListener('input', upd); upd();
+    const save = btn('📌 Anheften', () => {
+      const body = text.value.trim();
+      if (!body) { toast('Bitte einen Text für den Zettel eingeben.'); text.focus(); return; }
+      busy(save, async () => {
+        const n = { id: uid(), kind, body: body.slice(0, NOTE_LEN) };
+        try { await q(sb.from('character_notes').insert({ id: n.id, board_id: board.id, character_id: c.id, kind: n.kind, body: n.body })); } catch (e) { toast(errMsg(e)); return; }
+        c.notes = [...(c.notes || []), { ...n, authorId: me ? me.id : null, authorName: me ? me.username : '', created: new Date().toISOString() }];
+        toast('Zettel angeheftet.');
+        if (currentModal === formBack) { renderBoard(); charInfo(c.id); } else renderBoard(true);
+      });
+    }, 'primary');
+    const formBack = modal(`Zettel an ${c.name} anheften`, el('div', { class: 'form' },
+      el('div', { class: 'field' }, el('span', { text: 'Art' }), seg),
+      field('Text', text), left,
+      el('small', { class: 'muted', text: 'Der Zettel hängt im Charakternetz am Charakter. Alle Mitglieder sehen ihn; entfernen kann ihn jeder, der bearbeiten darf.' })),
+    [btn('Abbrechen', () => charInfo(c.id), 'ghost'), save]).parentElement;
+  }
+  // Klick auf einen Zettel im Netz
+  function noteInfo(charId, noteId) {
+    const c = byId(charId); const n = c && (c.notes || []).find((x) => x.id === noteId);
+    if (!n) return;
+    modal('Notizzettel', el('div', { class: 'info' },
+      el('p', {}, el('span', { text: 'Hängt an ' }), el('button', { class: 'linkbtn', type: 'button', onclick: () => charInfo(c.id) }, colorName(c))),
+      stickyCard(c, n, () => { closeModal(); renderBoard(); })),
+    [btn('Zum Charakter', () => charInfo(c.id), 'ghost'), btn('Schließen', closeModal, 'primary')]);
   }
 
   // ---------- Verbindungen ----------
@@ -1617,8 +1751,9 @@
     const defs = sv('defs'); const cp = sv('clipPath', { id: 'clipc', clipPathUnits: 'objectBoundingBox' }); cp.append(sv('circle', { cx: 0.5, cy: 0.5, r: 0.5 })); defs.append(cp);
     const grads = sv('g'); defs.append(grads); // Farbverläufe für Namen mit mehreren Fraktionen
     const vp = sv('g'); const gIsl = sv('g', { class: 'islands' }); const gIslN = sv('g', { class: 'island-names' }); const gl = sv('g'); const gn = sv('g'); const glb = sv('g'); // Inseln ganz unten, Beschriftungen über den Kreisen
+    const gNotes = sv('g', { class: 'notes' }); // Notizzettel ganz oben
     const rubber = sv('line', { class: 'rubber' }); rubber.style.display = 'none';
-    vp.append(gIsl, gIslN, gl, rubber, gn, glb); svg.append(defs, vp); wrap.append(svg);
+    vp.append(gIsl, gIslN, gl, rubber, gn, glb, gNotes); svg.append(defs, vp); wrap.append(svg);
     const hint = el('div', { class: 'hint' });
 
     // ---- Auswahl: Wer ist hervorgehoben, wer nur noch minimal sichtbar? ----
@@ -1655,6 +1790,7 @@
         g.classList.toggle('dim', on && !r.vis.has(id));
         g.classList.toggle('picked', r.sel && r.picked.has(id) && r.vis.has(id));
       }
+      for (const g of gNotes.children) g.classList.toggle('dim', on && !r.vis.has(g.dataset.char));
       for (const l of board.links) {
         const e = linkEls.get(l.id); if (!e) continue;
         // Hervorgehoben: beide Enden sichtbar und (bei einer Auswahl) mindestens ein Ende ausgewählt
@@ -1817,6 +1953,7 @@
       for (const c of board.characters) {
         if (dimmed.has(c.id) || hovId) continue; // beim Hover zählen nur Überschneidungen der Beschriftungen untereinander
         const r = radiusFor(deg.get(c.id)) + 2; put({ c: true, x: c.x, y: c.y, r }, c.x - r, c.y - r, c.x + r, c.y + r);
+        const nb = noteBox(c); if (nb) put({ x0: nb[0], y0: nb[1], x1: nb[2], y1: nb[3] }, ...nb); // Zettel verdecken nichts
       }
       const hit = (o, x0, y0, x1, y1) => {
         if (o.c) { const nx = clamp(o.x, x0, x1), ny = clamp(o.y, y0, y1); return Math.hypot(o.x - nx, o.y - ny) < o.r; }
@@ -1838,6 +1975,58 @@
         if (free) put({ x0, y0, x1, y1 }, x0, y0, x1, y1);
       }
     }
+    // Notizzettel: bis zu 4 kleine Zettel oben rechts am Kreis (2 × 2), leicht schräg, mit Pinnnadel.
+    // An/aus wird im Browser gemerkt. Aus der Ferne nur farbige Zettel ohne Text.
+    const NW = 84, NH = 58, NGAP = 6, NROT = [-3, 2.5, 2, -2.5];
+    let notesOn = store('cn-notes') !== '0';
+    const noteEls = new Map(); // Charakter-ID -> Gruppe
+    const notePos = (r, i) => ({ x: r * 0.7 + (i % 2) * (NW + NGAP), y: -r * 0.7 - NH - Math.floor(i / 2) * (NH + NGAP) });
+    // Fläche der Zettel eines Charakters in Weltkoordinaten (für Beschriftungen ohne Überlappung)
+    function noteBox(c) {
+      const n = notesOn ? (c.notes || []).length : 0; if (!n) return null;
+      const r = radiusFor(curDeg.get(c.id)); const cols = Math.min(2, n), rows = Math.ceil(n / 2);
+      const x0 = c.x + r * 0.7, y1 = c.y - r * 0.7;
+      return [x0 - 3, y1 - rows * NH - (rows - 1) * NGAP - 3, x0 + cols * NW + (cols - 1) * NGAP + 3, y1 + 3];
+    }
+    // Text auf höchstens 3 Zeilen umbrechen (breite Zeichen zählen doppelt), Rest mit „…“
+    function noteLines(text, max = 12, lines = 3) {
+      const out = []; let cur = '', u = 0;
+      const push = () => { out.push(cur.trimEnd()); cur = ''; u = 0; };
+      for (const word of String(text).replace(/\s+/g, ' ').trim().split(/(?<= )/)) {
+        const wu = textUnits(word.trimEnd());
+        if (u && u + wu > max) push();
+        for (const ch of word) {
+          const w = isWide(ch) ? 2 : 1;
+          if (u + w > max && !(ch === ' ')) push();
+          if (!(ch === ' ' && !u)) { cur += ch; u += w; }
+        }
+      }
+      if (cur.trim()) push();
+      if (out.length > lines) { out.length = lines; out[lines - 1] = trunc(out[lines - 1] + '…', max).replace(/…?$/, '…'); }
+      return out;
+    }
+    function drawNotes() {
+      gNotes.replaceChildren(); noteEls.clear();
+      if (!notesOn) return;
+      for (const c of board.characters) {
+        const notes = c.notes || []; if (!notes.length) continue;
+        const r = radiusFor(curDeg.get(c.id));
+        const g = sv('g', { class: 'note-group' + (c.dead ? ' dead' : ''), transform: `translate(${c.x},${c.y})` }); g.dataset.char = c.id;
+        notes.slice(0, NOTE_MAX).forEach((n, i) => {
+          const p = notePos(r, i); const k = NOTE_KINDS[n.kind] || NOTE_KINDS.note;
+          const ng = sv('g', { class: 'note kind-' + n.kind, transform: `translate(${p.x},${p.y}) rotate(${NROT[i]} ${NW / 2} ${NH / 2})`, tabindex: 0, role: 'button', 'aria-label': `${k.label} an ${c.name}: ${n.body}` });
+          ng.dataset.note = n.id; ng.dataset.char = c.id;
+          ng.append(sv('rect', { class: 'note-paper', width: NW, height: NH, rx: 2 }), sv('circle', { class: 'note-pin', cx: NW / 2, cy: 2, r: 3.2 }));
+          const head = sv('text', { class: 'note-kind', x: 6, y: 14 }); head.textContent = k.icon + ' ' + k.label; ng.append(head);
+          const t = sv('text', { class: 'note-text', x: 6, y: 27 });
+          noteLines(n.body).forEach((line, li) => { const ts = sv('tspan', { x: 6, dy: li ? 11.5 : 0 }); ts.textContent = line; t.append(ts); });
+          const tt = sv('title'); tt.textContent = `${k.label}: ${n.body}` + (n.authorName ? ` – ${n.authorName}` : '');
+          ng.append(t, tt); g.append(ng);
+        });
+        gNotes.append(g); noteEls.set(c.id, g);
+      }
+    }
+
     // Fraktionsinseln: zart gefärbte Fläche um alle Charaktere mit dieser Hauptfraktion (erste Fraktion in ihrer Liste) –
     // jeder Charakter gehört höchstens zu einer Insel. Verzweigt entlang des kürzesten Verbindungsbaums;
     // weit entfernte Gruppen werden eigene Inseln (nach „✨ Anordnen“ gibt es je Fraktion genau eine).
@@ -1902,6 +2091,8 @@
       const sc = parseFloat(wrap.style.getPropertyValue('--name-scale')) || 1;
       const CELL = 220; const grid = new Map();
       const items = [];
+      const putBox = (b) => { for (let gx = Math.floor(b[0] / CELL); gx <= Math.floor(b[2] / CELL); gx++) for (let gy = Math.floor(b[1] / CELL); gy <= Math.floor(b[3] / CELL); gy++) { const k = gx + ',' + gy; if (!grid.has(k)) grid.set(k, []); grid.get(k).push(b); } };
+      if (!hovId) for (const g of gNotes.children) { if (g.classList.contains('dim')) continue; const c = byId(g.dataset.char); const b = c && noteBox(c); if (b) putBox(b); }
       for (const g of gn.children) {
         const c = byId(g.dataset.char); if (!c) continue;
         const rk = g.dataset.rank; const picked = g.classList.contains('picked');
@@ -1977,6 +2168,7 @@
         }
         g.append(nm); gn.append(g);
       });
+      drawNotes();
       drawIslands();
       applyFocus();
     }
@@ -2009,13 +2201,15 @@
     const pz = new PanZoom(wrap, (t) => { vp.setAttribute('transform', `translate(${t.x},${t.y}) scale(${t.k})`); setLod(t.k); netT.set(board.id, { ...t }); }, {
       min: 0.1, max: 4,
       onDown(e) {
+        const nt = e.target.closest && e.target.closest('.note');
+        if (nt) return { move() {}, up(ev, moved) { if (!moved) noteInfo(nt.dataset.char, nt.dataset.note); } };
         const n = e.target.closest && e.target.closest('.node');
         if (n) {
           const c = byId(n.dataset.char);
           if (netMode === 'move' && canEdit()) {
             const s = pz.toWorld(e.clientX, e.clientY); const ox = c.x, oy = c.y;
             return {
-              move(ev) { const p = pz.toWorld(ev.clientX, ev.clientY); c.x = Math.round(ox + p.x - s.x); c.y = Math.round(oy + p.y - s.y); n.setAttribute('transform', `translate(${c.x},${c.y})`); moveLinksOf(c.id); islandsSoon(); },
+              move(ev) { const p = pz.toWorld(ev.clientX, ev.clientY); c.x = Math.round(ox + p.x - s.x); c.y = Math.round(oy + p.y - s.y); n.setAttribute('transform', `translate(${c.x},${c.y})`); const ng = noteEls.get(c.id); if (ng) ng.setAttribute('transform', `translate(${c.x},${c.y})`); moveLinksOf(c.id); islandsSoon(); },
               up(ev, moved) {
                 if (!moved) { tapChar(c); return; }
                 cullLabels(); cullNames(); drawIslands();
@@ -2055,7 +2249,8 @@
       if (!board.characters.length) { pz.set({ x: r.width / 2, y: r.height / 2, k: 1 }); return; }
       const xs = board.characters.map((c) => c.x), ys = board.characters.map((c) => c.y);
       const pad = 52 + 50;
-      const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad, minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
+      let minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad, minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
+      for (const c of board.characters) { const nb = noteBox(c); if (nb) { minX = Math.min(minX, nb[0] - 10); minY = Math.min(minY, nb[1] - 10); maxX = Math.max(maxX, nb[2] + 10); maxY = Math.max(maxY, nb[3] + 10); } } // Zettel mit einpassen
       const h = Math.max(120, r.height - 70); // Platz für den Hinweis unten lassen
       const k = clamp(Math.min(r.width / (maxX - minX), h / (maxY - minY)), 0.1, 1.5);
       pz.set({ x: r.width / 2 - ((minX + maxX) / 2) * k, y: h / 2 - ((minY + maxY) / 2) * k, k });
@@ -2067,6 +2262,12 @@
       islBtn.classList.toggle('active', islandsOn); islBtn.setAttribute('aria-pressed', String(islandsOn)); drawIslands();
     }, 'small islands-btn' + (islandsOn ? ' active' : ''));
     islBtn.setAttribute('aria-pressed', String(islandsOn)); islBtn.title = 'Fraktionsinseln ein-/ausblenden';
+    const anyNotes = board.characters.some((c) => (c.notes || []).length);
+    const notesBtn = anyNotes ? btn([el('span', { text: '📝' }), el('span', { class: 'lbl', text: ' Zettel' })], () => {
+      notesOn = !notesOn; store('cn-notes', notesOn ? '1' : '0');
+      notesBtn.classList.toggle('active', notesOn); notesBtn.setAttribute('aria-pressed', String(notesOn)); drawNotes(); applyFocus();
+    }, 'small notes-btn' + (notesOn ? ' active' : '')) : null;
+    if (notesBtn) { notesBtn.setAttribute('aria-pressed', String(notesOn)); notesBtn.title = 'Notizzettel ein-/ausblenden'; }
     async function savePositions(pos) {
       const todo = board.characters.filter((c) => { const p = pos.get(c.id); return p && (p.x !== c.x || p.y !== c.y); });
       let i = 0;
@@ -2094,10 +2295,10 @@
       try { await savePositions(prev); layoutUndo.delete(board.id); } catch (e) { toast(errMsg(e)); } finally { netT.delete(board.id); renderBoard(); }
     }), 'small ghost undo-btn') : null;
     main.append(el('div', { class: 'toolbar' }, canEdit() ? modeBtns : null, canEdit() ? btn('🎨 Fraktionen', factionDialog, 'small') : null,
-      focusBtn, clearBtn, islBtn, arrangeBtn, undoBtn, el('div', { class: 'spacer' }), zoomButtons(pz, fit)), wrap, hint);
+      focusBtn, clearBtn, islBtn, notesBtn, arrangeBtn, undoBtn, el('div', { class: 'spacer' }), zoomButtons(pz, fit)), wrap, hint);
     svg.addEventListener('pointerover', (e) => {
       if (e.pointerType !== 'mouse' || pz.h) return;
-      const n = e.target.closest && e.target.closest('.node');
+      const n = e.target.closest && e.target.closest('.node, .note');
       setHover(n ? n.dataset.char : null);
     });
     svg.addEventListener('pointerleave', () => setHover(null));
@@ -2107,6 +2308,8 @@
       if (e.key !== 'Enter' && e.key !== ' ') return;
       const n = e.target.closest && e.target.closest('.node');
       const lb = e.target.closest && e.target.closest('.link-label');
+      const nt = e.target.closest && e.target.closest('.note');
+      if (nt) { e.preventDefault(); noteInfo(nt.dataset.char, nt.dataset.note); return; }
       if (n) { e.preventDefault(); const c = byId(n.dataset.char); if (c) nodeTap(c); }
       else if (lb) { e.preventDefault(); linkInfo(lb.dataset.link); }
     });

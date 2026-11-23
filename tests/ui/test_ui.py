@@ -689,6 +689,178 @@ def main():
             pg.screenshot(path=os.path.join(OUT, 'handy_netz_lesbar.png'))
             ctx.close()
 
+        # ================= 13. Bearbeitungsrechte + Notizzettel (seit 2.11) =================
+        def rights(mobile):
+            tag = 'Handy' if mobile else 'Desktop'; W = 375 if mobile else 1200
+            ctx = context(**MOBILE) if mobile else context(); pg = page(ctx)
+            visit = lambda u: pg.evaluate(f"(window.__db.board_visits.find(v => v.board_id === '{BID}' && v.user_id === '{u}') || {{}}).can_edit")
+            pg.goto(U + f'#/b/{BID}/netz'); pg.wait_for_timeout(700)
+            pg.locator('.share-btn').click(); pg.wait_for_timeout(500)
+            row = lambda name: pg.locator(f'.modal li.member:has(strong:text-is("{name}"))')
+            allcb = pg.locator('.modal input.all-edit')
+            check(f'Rechte {tag}: Teilen-Dialog mit „Alle Mitglieder dürfen bearbeiten“ (aus) und Schalter je Mitglied',
+                  allcb.count() == 1 and not allcb.is_checked() and row('test_besucher').locator('.edit-toggle input').count() == 1
+                  and row('さくら').locator('.edit-toggle input').count() == 1 and pg.locator('.modal li.member.owner .edit-toggle').count() == 0)
+            check(f'Rechte {tag}: Mitglieder anfangs „nur ansehen“', 'nur ansehen' in row('test_besucher').inner_text() and not row('test_besucher').locator('.edit-toggle input').is_checked())
+            row('test_besucher').locator('.edit-toggle').click(); pg.wait_for_timeout(400)
+            check(f'Rechte {tag}: Bearbeiten für test_besucher erlaubt (gespeichert)', visit('u-vis') is True and 'darf bearbeiten' in row('test_besucher').inner_text() and visit('u-jp') is False)
+            row('test_besucher').locator('.edit-toggle').click(); pg.wait_for_timeout(400)
+            check(f'Rechte {tag}: wieder entzogen', visit('u-vis') is False and 'nur ansehen' in row('test_besucher').inner_text())
+            pg.locator('.modal .all-edit-row').click(); pg.wait_for_timeout(500)
+            check(f'Rechte {tag}: „Alle Mitglieder dürfen bearbeiten“ gespeichert, Einzel-Schalter an + gesperrt',
+                  pg.evaluate(f"window.__db.boards.find(b => b.id === '{BID}').members_can_edit") is True
+                  and row('さくら').locator('.edit-toggle input').is_checked() and row('さくら').locator('.edit-toggle input').is_disabled()
+                  and 'ansehen und bearbeiten' in pg.inner_text('.modal .form > p'))
+            check(f'Rechte {tag}: Dialog passt in die Breite', pg.evaluate('document.documentElement.scrollWidth') <= W
+                  and pg.evaluate("(() => { const m = document.querySelector('.modal'); return m.scrollWidth <= m.clientWidth + 1; })()"))
+            pg.screenshot(path=os.path.join(OUT, f'rechte_teilen_{tag.lower()}.png'))
+            pg.locator('.modal .all-edit-row').click(); pg.wait_for_timeout(500)
+            check(f'Rechte {tag}: „Alle“ wieder aus', pg.evaluate(f"window.__db.boards.find(b => b.id === '{BID}').members_can_edit") is False and not row('さくら').locator('.edit-toggle input').is_disabled())
+            pg.keyboard.press('Escape')
+            # Sicht als Mitglied auf dem fremden Board 東京の物語 (Ersteller 山田太郎)
+            pg.evaluate(f"""(() => {{ const d = window.__db; d.board_visits.push({{ user_id: 'u-owner', board_id: '{BID2}', visited_at: '2026-11-22T10:00:00Z', can_edit: false }});
+                d.characters.push({{ id: 'x1', board_id: '{BID2}', name: '太郎', short: '', info: '', place: '', image_path: null, x: 0, y: 0, map_x: null, map_y: null, dead: false }},
+                                  {{ id: 'x2', board_id: '{BID2}', name: '花子', short: '', info: '', place: '', image_path: null, x: 220, y: 40, map_x: null, map_y: null, dead: false }});
+                d.character_notes.push({{ id: 'n-x1', board_id: '{BID2}', character_id: 'x1', kind: 'decision', body: 'Gruppe: Wir helfen ihm', author_id: 'u-other', author_name: '山田太郎', created_at: '2026-11-22T11:00:00Z' }}); }})()""")
+            def as_member(can_edit, all_edit):
+                pg.evaluate(f"""(() => {{ const d = window.__db; d.board_visits.find(v => v.board_id === '{BID2}' && v.user_id === 'u-owner').can_edit = {str(can_edit).lower()};
+                    d.boards.find(b => b.id === '{BID2}').members_can_edit = {str(all_edit).lower()}; }})()""")
+                pg.goto(U + '#/'); pg.wait_for_timeout(500); pg.goto(U + f'#/b/{BID2}/netz'); pg.wait_for_timeout(800)
+            as_member(False, False)
+            check(f'Rechte {tag}: ohne Recht „Nur ansehen“, keine Bearbeiten-Knöpfe', 'Nur ansehen' in pg.inner_text('.topbar') and pg.locator('.share-btn').count() == 0
+                  and pg.locator('.toolbar button:has-text("Charakter")').count() == 0)
+            check(f'Rechte {tag}: Zettel auch beim Ansehen sichtbar', pg.locator('.note-group[data-char="x1"] .note').count() == 1)
+            pg.locator('.node[data-char="x1"]').click(); pg.wait_for_timeout(400)
+            check(f'Rechte {tag}: Nur-Ansehen-Infokarte zeigt Zettel ohne Entfernen/Anheften', pg.locator('.modal .sticky').count() == 1 and 'Gruppe: Wir helfen ihm' in pg.inner_text('.modal')
+                  and '山田太郎' in pg.inner_text('.modal .sticky') and pg.locator('.modal .sticky-x').count() == 0 and pg.locator('.modal .add-note').count() == 0
+                  and pg.locator('.modal button:has-text("Bearbeiten")').count() == 0)
+            pg.keyboard.press('Escape')
+            for ce, ae, how in [(True, False, 'einzeln erlaubt'), (False, True, '„Alle Mitglieder“')]:
+                as_member(ce, ae)
+                check(f'Rechte {tag}: Mitglied ({how}) sieht „✏️ Bearbeiten“, aber keinen Teilen-Knopf', 'Bearbeiten' in pg.inner_text('.topbar .badge') and pg.locator('.share-btn').count() == 0)
+                check(f'Rechte {tag}: Mitglied ({how}) hat Werkzeuge zum Bearbeiten', pg.locator('.toolbar button:has-text("Charakter")').count() == 1
+                      and pg.locator('.toolbar button:has-text("Fraktionen")').count() == 1 and pg.locator('.arrange-btn').count() == 1)
+            pg.locator('.node[data-char="x2"]').click(); pg.wait_for_timeout(400)
+            check(f'Rechte {tag}: Mitglied mit Recht kann bearbeiten und Zettel anheften', pg.locator('.modal button:has-text("Bearbeiten")').count() == 1 and pg.locator('.modal .add-note').count() == 1)
+            pg.locator('.modal button:has-text("Bearbeiten")').click(); pg.wait_for_timeout(300)
+            pg.locator('.modal input[placeholder="Name des Charakters"]').fill('花子さん'); pg.locator('.modal button:has-text("Speichern")').click(); pg.wait_for_timeout(600)
+            check(f'Rechte {tag}: Mitglied speichert Änderung', pg.evaluate("window.__db.characters.find(c => c.id === 'x2').name") == '花子さん')
+            pg.goto(U + '#/'); pg.wait_for_timeout(600)
+            check(f'Rechte {tag}: „Mit mir geteilt“ zeigt „darf bearbeiten“', 'darf bearbeiten' in pg.locator('.board-card.shared').inner_text())
+            ctx.close()
+
+        def notes(mobile):
+            tag = 'Handy' if mobile else 'Desktop'; W = 375 if mobile else 1200
+            ctx = context(**MOBILE) if mobile else context(); pg = page(ctx)
+            cnt = lambda: pg.evaluate("window.__db.character_notes.filter(n => n.character_id === 'c5').length")
+            pg.goto(U + f'#/b/{BID}/netz'); pg.wait_for_timeout(800)
+            check(f'Zettel {tag}: ohne Zettel kein 📝-Schalter', pg.locator('.notes-btn').count() == 0)
+            pg.evaluate("document.querySelector('.node[data-char=\"c5\"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))"); pg.wait_for_timeout(400)
+            check(f'Zettel {tag}: Infokarte mit Abschnitt „Notizzettel (0/4)“', 'Notizzettel (0/4)' in pg.text_content('.modal') and pg.locator('.modal .add-note').count() == 1)
+            texts = [('guess', 'Er ist der Spion des Nordreichs'), ('decision', 'Gruppe hat beschlossen: Wir vertrauen ihm nicht'),
+                     ('note', 'とても長い日本語のメモです。彼は北の国のスパイかもしれません。確認が必要です。もっと長い文章'), ('note', 'x' * 280)]
+            for i, (kind, body) in enumerate(texts):
+                pg.locator('.modal .add-note').click(); pg.wait_for_timeout(300)
+                if i == 0:
+                    check(f'Zettel {tag}: Formular mit Art (Vermutung vorgewählt) und Zeichenzähler',
+                          pg.locator('.modal .note-kinds button[aria-checked=true]').get_attribute('data-kind') == 'guess' and '280 Zeichen übrig' in pg.inner_text('.modal')
+                          and pg.evaluate('document.documentElement.scrollWidth') <= W)
+                    pg.locator('.modal button:has-text("Anheften")').click(); pg.wait_for_timeout(300)
+                    check(f'Zettel {tag}: leerer Text wird nicht gespeichert', cnt() == 0 and pg.locator('.modal textarea.note-text').count() == 1)
+                pg.locator(f'.modal .note-kinds button[data-kind={kind}]').click()
+                pg.locator('.modal textarea.note-text').fill(body)
+                pg.locator('.modal button:has-text("Anheften")').click(); pg.wait_for_timeout(500)
+            rows = pg.evaluate("window.__db.character_notes.filter(n => n.character_id === 'c5')")
+            check(f'Zettel {tag}: 4 Zettel gespeichert (Art, Text, Board)', len(rows) == 4 and [r['kind'] for r in rows] == [k for k, _ in texts]
+                  and rows[0]['body'] == texts[0][1] and all(r['board_id'] == BID for r in rows))
+            check(f'Zettel {tag}: Infokarte zeigt 4/4, kein Anheften mehr, Hinweis', 'Notizzettel (4/4)' in pg.text_content('.modal') and pg.locator('.modal .sticky').count() == 4
+                  and pg.locator('.modal .add-note').count() == 0 and 'Höchstens 4' in pg.inner_text('.modal'))
+            check(f'Zettel {tag}: Verfasser und Art auf dem Zettel', 'test_ersteller' in pg.inner_text('.modal .sticky >> nth=0') and 'Vermutung' in pg.inner_text('.modal .sticky >> nth=0')
+                  and 'Entscheidung' in pg.inner_text('.modal .sticky >> nth=1'))
+            check(f'Zettel {tag}: Infokarte passt in die Breite', pg.evaluate("(() => { const m = document.querySelector('.modal'); return m.scrollWidth <= m.clientWidth + 1 && document.documentElement.scrollWidth <= %d; })()" % W))
+            pg.screenshot(path=os.path.join(OUT, f'zettel_infokarte_{tag.lower()}.png'))
+            pg.keyboard.press('Escape'); pg.wait_for_timeout(300)
+            grp = pg.locator('.note-group[data-char="c5"]')
+            check(f'Zettel {tag}: 4 Zettel hängen im Netz am Charakter', grp.locator('.note').count() == 4 and pg.locator('.notes-btn').count() == 1)
+            geo = pg.evaluate("""(() => { const g = document.querySelector('.note-group[data-char="c5"]'); const n = document.querySelector('.node[data-char="c5"] .node-bg');
+                const nr = n.getBoundingClientRect(); const rs = [...g.querySelectorAll('.note-paper')].map(r => r.getBoundingClientRect());
+                const texts = [...g.querySelectorAll('.note-text')].map(t => t.getBBox().width);
+                return { cx: nr.x + nr.width / 2, cy: nr.y + nr.height / 2, right: Math.min(...rs.map(r => r.x)), bottom: Math.max(...rs.map(r => r.y + r.height)), rs: rs.length,
+                         overlap: rs.some((a, i) => rs.some((b, j) => i < j && a.x + 4 < b.x + b.width && b.x + 4 < a.x + a.width && a.y + 4 < b.y + b.height && b.y + 4 < a.y + a.height)),
+                         maxText: Math.max(...texts), lines: Math.max(...[...g.querySelectorAll('.note-text')].map(t => t.children.length)) }; })()""")
+            check(f'Zettel {tag}: Zettel oben rechts am Kreis, ohne sich zu überdecken', geo['rs'] == 4 and geo['right'] > geo['cx'] and geo['bottom'] < geo['cy'] and not geo['overlap'], geo)
+            check(f'Zettel {tag}: Text passt auf den Zettel (≤ 3 Zeilen)', geo['maxText'] <= 80 and geo['lines'] <= 3, geo)
+            # Beschriftungen und Namen werden nicht von Zetteln verdeckt
+            pg.locator('button:has-text("Alles zeigen")').click(); pg.wait_for_timeout(200)
+            for _ in range(3): pg.locator('.toolbar button:text-is("+")').click()
+            pg.wait_for_timeout(400)
+            ov = pg.evaluate("""(() => { const notes = [...document.querySelectorAll('.note-paper')].map(r => r.getBoundingClientRect());
+                const vis = [...document.querySelectorAll('.link-label:not(.culled):not(.dim) rect'), ...document.querySelectorAll('.node:not(.name-off) .node-name')]
+                  .filter(e => getComputedStyle(e.closest('.link-label, .node-name')).opacity !== '0').map(e => e.getBoundingClientRect());
+                return vis.filter(a => notes.some(b => a.x + 2 < b.x + b.width && b.x + 2 < a.x + a.width && a.y + 2 < b.y + b.height && b.y + 2 < a.y + a.height)).length; })()""")
+            check(f'Zettel {tag}: keine Linienbeschriftung/kein Name unter einem Zettel', ov == 0, ov)
+            pg.screenshot(path=os.path.join(OUT, f'zettel_netz_{tag.lower()}.png'))
+            pg.locator('button:has-text("Alles zeigen")').click(); pg.wait_for_timeout(300)
+            check(f'Zettel {tag}: „Alles zeigen“ passt auch die Zettel ein', pg.evaluate("""(() => { const w = document.querySelector('.canvas').getBoundingClientRect();
+                return [...document.querySelectorAll('.note-paper')].every(r => { const b = r.getBoundingClientRect(); return b.x >= w.x - 1 && b.right <= w.right + 1 && b.y >= w.y - 1 && b.bottom <= w.bottom + 1; }); })()"""))
+            # Zettel antippen -> Dialog; entfernen in zwei Schritten
+            grp.locator('.note >> nth=1').click(); pg.wait_for_timeout(400)
+            check(f'Zettel {tag}: Antippen öffnet den Zettel', pg.locator('.modal h2').inner_text() == 'Notizzettel' and texts[1][1] in pg.inner_text('.modal'))
+            pg.locator('.modal .sticky-x').click(); pg.wait_for_timeout(200)
+            check(f'Zettel {tag}: Entfernen fragt nach (erster Klick)', cnt() == 4 and 'Entfernen?' in pg.inner_text('.modal .sticky-x'))
+            pg.locator('.modal .sticky-x').click(); pg.wait_for_timeout(500)
+            check(f'Zettel {tag}: entfernt (Server + Netz)', cnt() == 3 and pg.locator('.modal').count() == 0 and grp.locator('.note').count() == 3
+                  and texts[1][1] not in [r['body'] for r in pg.evaluate("window.__db.character_notes")])
+            # Tastatur
+            pg.locator('.note-group[data-char="c5"] .note >> nth=0').focus(); pg.keyboard.press('Enter'); pg.wait_for_timeout(300)
+            check(f'Zettel {tag}: per Tastatur erreichbar (Enter öffnet)', pg.locator('.modal h2').inner_text() == 'Notizzettel')
+            pg.locator('.modal button:has-text("Zum Charakter")').click(); pg.wait_for_timeout(300)
+            check(f'Zettel {tag}: „Zum Charakter“ öffnet die Infokarte (3/4, Anheften wieder möglich)', 'Notizzettel (3/4)' in pg.text_content('.modal') and pg.locator('.modal .add-note').count() == 1)
+            pg.keyboard.press('Escape')
+            # Charakter verschieben: Zettel wandern mit
+            if not mobile:
+                before = pg.locator('.note-group[data-char="c5"]').get_attribute('transform')
+                bb = pg.locator('.node[data-char="c5"] .node-bg').bounding_box()
+                pg.mouse.move(bb['x'] + bb['width'] / 2, bb['y'] + bb['height'] / 2); pg.mouse.down(); pg.mouse.move(bb['x'] + 60, bb['y'] + 90, steps=6); pg.mouse.up(); pg.wait_for_timeout(400)
+                c5 = pg.evaluate("window.__db.characters.find(c => c.id === 'c5')")
+                check('Zettel Desktop: wandern beim Verschieben mit', pg.locator('.note-group[data-char="c5"]').get_attribute('transform') == f"translate({c5['x']},{c5['y']})" != before)
+            # Auswahl blendet Zettel mit ab
+            pg.locator('.legend button[data-faction="f1"]').click(); pg.wait_for_timeout(300)
+            check(f'Zettel {tag}: Auswahl blendet Zettel nicht gezeigter Charaktere ab', 'dim' in (pg.locator('.note-group[data-char="c5"]').get_attribute('class') or ''))
+            pg.locator('.legend button[data-faction="f1"]').click(); pg.wait_for_timeout(200)
+            # Schalter an/aus, gemerkt
+            pg.locator('.notes-btn').click(); pg.wait_for_timeout(200)
+            check(f'Zettel {tag}: 📝 blendet Zettel aus', pg.locator('.note').count() == 0 and pg.locator('.notes-btn').get_attribute('aria-pressed') == 'false')
+            pg.goto(U + f'#/b/{BID}/tabelle'); pg.wait_for_timeout(300); pg.goto(U + f'#/b/{BID}/netz'); pg.wait_for_timeout(600)
+            check(f'Zettel {tag}: „aus“ bleibt gemerkt', pg.locator('.note').count() == 0 and pg.evaluate("localStorage.getItem('cn-notes')") == '0')
+            pg.locator('.notes-btn').click(); pg.wait_for_timeout(200)
+            check(f'Zettel {tag}: wieder an', pg.locator('.note-group[data-char="c5"] .note').count() == 3)
+            # Detailstufe fern: Zettel ohne Text
+            for _ in range(8): pg.locator('.toolbar button:text-is("−")').click()
+            pg.wait_for_timeout(300)
+            check(f'Zettel {tag}: aus der Ferne nur farbige Zettel (Text ausgeblendet)', pg.evaluate("getComputedStyle(document.querySelector('.note .note-text')).opacity") == '0')
+            # Bearbeiten des Charakters behält die Zettel
+            pg.evaluate("document.querySelector('.node[data-char=\"c5\"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))"); pg.wait_for_timeout(300)
+            pg.locator('.modal button:has-text("Bearbeiten")').click(); pg.wait_for_timeout(300)
+            pg.locator('.modal input[placeholder="Name des Charakters"]').fill('Figur 5 neu'); pg.locator('.modal button:has-text("Speichern")').click(); pg.wait_for_timeout(600)
+            check(f'Zettel {tag}: nach dem Bearbeiten des Charakters noch da', pg.locator('.note-group[data-char="c5"] .note').count() == 3)
+            if not mobile:
+                # Export enthält die Zettel; Import übernimmt höchstens 4 je Charakter, prüft Art und Länge
+                pg.goto(U + '#/'); pg.wait_for_timeout(600)
+                with pg.expect_download() as dl:
+                    pg.locator('.board-card:has(h3:text-is("Testprojekt")) button:has-text("Exportieren")').click()
+                data = json.loads(open(dl.value.path(), encoding='utf-8').read())
+                c5 = next(c for c in data['characters'] if c['id'] == 'c5')
+                check('Zettel: Export enthält die Zettel (Art, Text, Verfasser)', len(c5.get('notes', [])) == 3 and c5['notes'][0]['kind'] == 'guess' and c5['notes'][0]['author'] == 'test_ersteller')
+                doc = {'format': 'charakter-netz', 'version': 2, 'name': 'Import mit Zetteln', 'factions': [], 'links': [],
+                       'characters': [{'id': 'a', 'name': 'A', 'x': 0, 'y': 0, 'notes': [{'kind': 'guess', 'body': 'eins'}, {'kind': 'böse', 'body': 'zwei'}, {'kind': 'note', 'body': '   '},
+                                       {'kind': 'decision', 'body': 'y' * 400}, {'kind': 'note', 'body': 'vier'}, {'kind': 'note', 'body': 'fünf'}]}]}
+                pg.set_input_files('input[type=file][accept*="json"]', {'name': 'z.json', 'mimeType': 'application/json', 'buffer': json.dumps(doc).encode()}); pg.wait_for_timeout(1500)
+                nb = pg.evaluate("(() => { const b = window.__db.boards.find(b => b.name === 'Import mit Zetteln'); return b ? window.__db.character_notes.filter(n => n.board_id === b.id) : null; })()") or []
+                check('Zettel: Import übernimmt höchstens 4, unbekannte Art -> Notiz, leere weg, Text gekürzt',
+                      [n['kind'] for n in nb] == ['guess', 'note', 'decision', 'note'] and [n['body'] for n in nb][:2] == ['eins', 'zwei'] and len(nb[2]['body']) == 280, nb)
+            ctx.close()
+
         section('Grundfunktionen', basics)
         section('Japanisch', japanese)
         section('Einladung', invite)
@@ -705,6 +877,10 @@ def main():
         section('Dialog sperrt Hintergrund Desktop', modal_lock, False)
         section('Dialog sperrt Hintergrund Handy', modal_lock, True)
         section('Handy-Größen', mobile_size)
+        section('Bearbeitungsrechte Desktop', rights, False)
+        section('Bearbeitungsrechte Handy', rights, True)
+        section('Notizzettel Desktop', notes, False)
+        section('Notizzettel Handy', notes, True)
         section('Updates', updates)
         b.close()
     srv.shutdown()

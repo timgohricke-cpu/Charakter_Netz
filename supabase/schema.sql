@@ -38,6 +38,8 @@ alter table public.boards drop constraint if exists boards_cover_path_check;
 alter table public.boards add constraint boards_cover_path_check check (
   cover_path is null or cover_path ~ ('^' || id::text || '/cover-[0-9a-f-]{36}\.jpg$'));
 create unique index if not exists boards_share_token_idx on public.boards (share_token);
+-- Bearbeitungsrechte (seit 2.11): Der Ersteller kann allen Mitgliedern auf einmal Bearbeiten erlauben
+alter table public.boards add column if not exists members_can_edit boolean not null default false;
 
 create table if not exists public.characters (
   id         uuid primary key default gen_random_uuid(),
@@ -112,6 +114,22 @@ create table if not exists public.links (
 );
 create index if not exists links_board_idx on public.links (board_id);
 
+-- Notizzettel an Charakteren (seit 2.11): Vermutungen, Gruppenentscheidungen, Notizen – höchstens 4 je Charakter.
+-- Verfasser und Zeitpunkt setzt der Server (Trigger), sie sind nicht fälschbar. Zettel werden nur angeheftet oder entfernt.
+create table if not exists public.character_notes (
+  id           uuid primary key default gen_random_uuid(),
+  board_id     uuid not null references public.boards (id) on delete cascade,
+  character_id uuid not null,
+  kind         text not null default 'note' check (kind in ('note', 'guess', 'decision')),
+  body         text not null check (char_length(body) between 1 and 280 and btrim(body) <> ''),
+  author_id    uuid references public.profiles (id) on delete set null,
+  author_name  text not null default '' check (char_length(author_name) <= 24),
+  created_at   timestamptz not null default now(),
+  foreign key (board_id, character_id) references public.characters (board_id, id) on delete cascade
+);
+create index if not exists character_notes_board_idx on public.character_notes (board_id);
+create index if not exists character_notes_char_idx on public.character_notes (character_id);
+
 create table if not exists public.board_visits (
   user_id    uuid not null references public.profiles (id) on delete cascade,
   board_id   uuid not null references public.boards (id) on delete cascade,
@@ -119,6 +137,8 @@ create table if not exists public.board_visits (
   primary key (user_id, board_id)
 );
 create index if not exists board_visits_board_idx on public.board_visits (board_id);
+-- Bearbeitungsrecht je Mitglied (seit 2.11), setzt nur der Ersteller
+alter table public.board_visits add column if not exists can_edit boolean not null default false;
 
 -- ---------------------------------------------------------------------
 -- Hilfsfunktionen für die Rechte
@@ -139,6 +159,17 @@ language sql stable security definer set search_path = '' as $$
   select auth.uid() is not null and (
     exists (select 1 from public.boards b where b.id = bid and b.owner_id = auth.uid())
     or exists (select 1 from public.board_visits v where v.board_id = bid and v.user_id = auth.uid())
+  );
+$$;
+
+-- Bearbeiten darf (seit 2.11): der Ersteller oder ein Mitglied mit Bearbeitungsrecht
+-- (einzeln vergeben oder „Alle Mitglieder dürfen bearbeiten“ am Board)
+create or replace function private.can_edit_board(bid uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select auth.uid() is not null and (
+    exists (select 1 from public.boards b where b.id = bid and b.owner_id = auth.uid())
+    or exists (select 1 from public.board_visits v join public.boards b on b.id = v.board_id
+               where v.board_id = bid and v.user_id = auth.uid() and (v.can_edit or b.members_can_edit))
   );
 $$;
 
@@ -235,6 +266,10 @@ begin
     if (select count(*) from public.character_factions where character_id = new.character_id) >= 10 then
       raise exception 'limit_char_factions';
     end if;
+  elsif tg_table_name = 'character_notes' then
+    if (select count(*) from public.character_notes where character_id = new.character_id) >= 4 then
+      raise exception 'limit_notes';
+    end if;
   end if;
   return new;
 end;
@@ -256,6 +291,13 @@ begin
     if new.share_token <> old.share_token and current_setting('cn.rotate', true) is distinct from 'on' then
       raise exception 'immutable_column';
     end if;
+    -- Mitglieder mit Bearbeitungsrecht dürfen Inhalte (z. B. die Weltkarte) ändern,
+    -- aber nicht Name, Titelbild und Bearbeitungsrechte des Boards
+    if auth.uid() is not null and old.owner_id <> auth.uid() and (
+         new.name is distinct from old.name or new.cover_path is distinct from old.cover_path
+         or new.members_can_edit is distinct from old.members_can_edit) then
+      raise exception 'not_owner';
+    end if;
   elsif new.board_id <> old.board_id then
     raise exception 'immutable_column';
   end if;
@@ -274,14 +316,51 @@ begin
     execute format('drop trigger if exists %1$s_protect on public.%1$s', t);
     execute format('create trigger %1$s_protect before update on public.%1$s for each row execute function public.protect_columns()', t);
   end loop;
-  drop trigger if exists character_factions_limits on public.character_factions;
-  create trigger character_factions_limits before insert on public.character_factions
-    for each row execute function public.enforce_limits();
-  foreach t in array array['characters', 'links', 'factions', 'character_factions'] loop
+  foreach t in array array['character_factions', 'character_notes'] loop
+    execute format('drop trigger if exists %1$s_limits on public.%1$s', t);
+    execute format('create trigger %1$s_limits before insert on public.%1$s for each row execute function public.enforce_limits()', t);
+  end loop;
+  foreach t in array array['characters', 'links', 'factions', 'character_factions', 'character_notes'] loop
     execute format('drop trigger if exists %1$s_touch_board on public.%1$s', t);
     execute format('create trigger %1$s_touch_board after insert or update or delete on public.%1$s for each row execute function public.touch_board()', t);
   end loop;
 end $$;
+
+-- Notizzettel: Verfasser und Zeitpunkt setzt immer der Server
+create or replace function public.set_note_author() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  new.author_id := auth.uid();
+  new.author_name := coalesce((select p.username from public.profiles p where p.id = auth.uid()), '');
+  new.created_at := now();
+  return new;
+end;
+$$;
+drop trigger if exists character_notes_author on public.character_notes;
+create trigger character_notes_author before insert on public.character_notes
+  for each row execute function public.set_note_author();
+
+-- Besuche: Bearbeitungsrecht ändert nur der Ersteller; den Besuchszeitpunkt nur das Mitglied selbst
+create or replace function public.protect_visits() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.user_id <> old.user_id or new.board_id <> old.board_id then
+    raise exception 'immutable_column';
+  end if;
+  if auth.uid() is not null then
+    if new.can_edit is distinct from old.can_edit and not private.is_board_owner(old.board_id) then
+      raise exception 'not_owner';
+    end if;
+    if new.visited_at is distinct from old.visited_at and old.user_id <> auth.uid() then
+      raise exception 'not_owner';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists board_visits_protect on public.board_visits;
+create trigger board_visits_protect before update on public.board_visits
+  for each row execute function public.protect_visits();
 
 -- ---------------------------------------------------------------------
 -- Row Level Security
@@ -293,10 +372,11 @@ alter table public.links        enable row level security;
 alter table public.board_visits enable row level security;
 alter table public.factions     enable row level security;
 alter table public.character_factions enable row level security;
+alter table public.character_notes enable row level security;
 
 -- Nicht angemeldete Besucher bekommen überhaupt keinen Zugriff auf die Tabellen
-revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions, public.character_factions from anon;
-revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions, public.character_factions from authenticated;
+revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions, public.character_factions, public.character_notes from anon;
+revoke all on public.profiles, public.boards, public.characters, public.links, public.board_visits, public.factions, public.character_factions, public.character_notes from authenticated;
 grant select on public.profiles to authenticated;
 grant select, insert, delete on public.characters, public.links, public.factions, public.character_factions to authenticated;
 -- Ändern nur bei Inhaltsspalten (ID, Board und Zeitstempel bleiben unverändert)
@@ -304,13 +384,16 @@ grant update (name, short, info, place, image_path, x, y, map_x, map_y, dead) on
 grant update (short, long) on public.links to authenticated;
 grant update (name, color) on public.factions to authenticated;
 grant update (position) on public.character_factions to authenticated;
+-- Notizzettel: anheften und entfernen (nicht ändern); Verfasser/Zeitpunkt setzt der Server
+grant select, delete on public.character_notes to authenticated;
+grant insert (id, board_id, character_id, kind, body) on public.character_notes to authenticated;
 grant select, delete on public.board_visits to authenticated;
-grant update (visited_at) on public.board_visits to authenticated;
+grant update (visited_at, can_edit) on public.board_visits to authenticated;
 -- Boards nur spaltenweise: Das Freigabe-Token sieht nur der Ersteller (über get_share_token),
 -- Besitzer, ID und Zeitstempel kann niemand selbst setzen.
-grant select (id, owner_id, name, map_path, map_w, map_h, cover_path, created_at, updated_at) on public.boards to authenticated;
+grant select (id, owner_id, name, map_path, map_w, map_h, cover_path, members_can_edit, created_at, updated_at) on public.boards to authenticated;
 grant insert (name, map_path, map_w, map_h) on public.boards to authenticated;
-grant update (name, map_path, map_w, map_h, cover_path) on public.boards to authenticated;
+grant update (name, map_path, map_w, map_h, cover_path, members_can_edit) on public.boards to authenticated;
 grant delete on public.boards to authenticated;
 
 -- Profile: Man sieht nur sich selbst, die Ersteller der Boards, die man ansehen darf,
@@ -338,25 +421,27 @@ drop policy if exists boards_insert on public.boards;
 create policy boards_insert on public.boards for insert to authenticated
   with check (owner_id = auth.uid());
 drop policy if exists boards_update on public.boards;
+-- Ändern: Ersteller und Mitglieder mit Bearbeitungsrecht (Name, Titelbild und Rechte schützt protect_columns)
 create policy boards_update on public.boards for update to authenticated
-  using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+  using (private.can_edit_board(id)) with check (private.can_edit_board(id));
 drop policy if exists boards_delete on public.boards;
 create policy boards_delete on public.boards for delete to authenticated
   using (owner_id = auth.uid());
 
--- Charaktere, Verbindungen und Fraktionen: lesen mit Leserecht, ändern nur als Ersteller
+-- Charaktere, Verbindungen, Fraktionen und Notizzettel: lesen mit Leserecht,
+-- ändern als Ersteller oder Mitglied mit Bearbeitungsrecht (seit 2.11)
 do $$
 declare t text;
 begin
-  foreach t in array array['characters', 'links', 'factions', 'character_factions'] loop
+  foreach t in array array['characters', 'links', 'factions', 'character_factions', 'character_notes'] loop
     execute format('drop policy if exists %1$s_select on public.%1$s', t);
     execute format('create policy %1$s_select on public.%1$s for select to authenticated using (private.can_read_board(board_id))', t);
     execute format('drop policy if exists %1$s_insert on public.%1$s', t);
-    execute format('create policy %1$s_insert on public.%1$s for insert to authenticated with check (private.is_board_owner(board_id))', t);
+    execute format('create policy %1$s_insert on public.%1$s for insert to authenticated with check (private.can_edit_board(board_id))', t);
     execute format('drop policy if exists %1$s_update on public.%1$s', t);
-    execute format('create policy %1$s_update on public.%1$s for update to authenticated using (private.is_board_owner(board_id)) with check (private.is_board_owner(board_id))', t);
+    execute format('create policy %1$s_update on public.%1$s for update to authenticated using (private.can_edit_board(board_id)) with check (private.can_edit_board(board_id))', t);
     execute format('drop policy if exists %1$s_delete on public.%1$s', t);
-    execute format('create policy %1$s_delete on public.%1$s for delete to authenticated using (private.is_board_owner(board_id))', t);
+    execute format('create policy %1$s_delete on public.%1$s for delete to authenticated using (private.can_edit_board(board_id))', t);
   end loop;
 end $$;
 
@@ -366,8 +451,10 @@ drop policy if exists visits_select on public.board_visits;
 create policy visits_select on public.board_visits for select to authenticated
   using (user_id = auth.uid() or private.is_board_owner(board_id));
 drop policy if exists visits_update on public.board_visits;
+-- Aktualisieren: das Mitglied selbst (Besuchszeit) oder der Ersteller (Bearbeitungsrecht) – Feinheiten prüft protect_visits
 create policy visits_update on public.board_visits for update to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = auth.uid() or private.is_board_owner(board_id))
+  with check (user_id = auth.uid() or private.is_board_owner(board_id));
 drop policy if exists visits_delete on public.board_visits;
 create policy visits_delete on public.board_visits for delete to authenticated
   using (user_id = auth.uid() or private.is_board_owner(board_id));
@@ -471,16 +558,17 @@ language sql stable security definer set search_path = '' as $$
     where o.bucket_id = 'board-images' and o.name like bid::text || '/%') < 3000;
 $$;
 
-revoke all on function private.is_board_owner(uuid), private.can_read_board(uuid), private.board_id_from_path(text),
+revoke all on function private.is_board_owner(uuid), private.can_read_board(uuid), private.can_edit_board(uuid), private.board_id_from_path(text),
   public.open_shared_board(uuid, uuid), public.get_share_token(uuid), public.reset_share_link(uuid, boolean),
   public.transfer_board_owner(uuid, uuid), public.delete_my_account(), public.handle_new_user(), public.touch_board(), public.enforce_limits(),
   public.protect_columns(), public.touch_updated_at(), public.cn_email_domain(), public.protect_auth_email(),
-  private.board_image_quota_ok(uuid) from public, anon;
+  public.set_note_author(), public.protect_visits(), private.board_image_quota_ok(uuid) from public, anon;
 -- Interne Funktionen (Trigger, Hilfen) braucht niemand direkt aufzurufen
 revoke all on function public.handle_new_user(), public.touch_board(), public.enforce_limits(),
-  public.protect_columns(), public.touch_updated_at(), public.cn_email_domain(), public.protect_auth_email()
+  public.protect_columns(), public.touch_updated_at(), public.cn_email_domain(), public.protect_auth_email(),
+  public.set_note_author(), public.protect_visits()
   from authenticated;
-grant execute on function private.is_board_owner(uuid), private.can_read_board(uuid), private.board_id_from_path(text),
+grant execute on function private.is_board_owner(uuid), private.can_read_board(uuid), private.can_edit_board(uuid), private.board_id_from_path(text),
   public.open_shared_board(uuid, uuid), public.get_share_token(uuid), public.reset_share_link(uuid, boolean),
   public.transfer_board_owner(uuid, uuid), public.delete_my_account(), private.board_image_quota_ok(uuid) to authenticated;
 
@@ -495,17 +583,25 @@ on conflict (id) do update set public = false, file_size_limit = excluded.file_s
 drop policy if exists cn_images_select on storage.objects;
 create policy cn_images_select on storage.objects for select to authenticated
   using (bucket_id = 'board-images' and private.can_read_board(private.board_id_from_path(name)));
+-- Hochladen/Ändern/Löschen: Ersteller alles; Mitglieder mit Bearbeitungsrecht alles außer dem Titelbild (cover-…)
+create or replace function private.can_write_image(p text) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select private.is_board_owner(private.board_id_from_path(p))
+      or (private.can_edit_board(private.board_id_from_path(p)) and split_part(p, '/', 2) not like 'cover-%');
+$$;
+revoke all on function private.can_write_image(text) from public, anon;
+grant execute on function private.can_write_image(text) to authenticated;
 drop policy if exists cn_images_insert on storage.objects;
 create policy cn_images_insert on storage.objects for insert to authenticated
-  with check (bucket_id = 'board-images' and private.is_board_owner(private.board_id_from_path(name))
+  with check (bucket_id = 'board-images' and private.can_write_image(name)
               and private.board_image_quota_ok(private.board_id_from_path(name)));
 drop policy if exists cn_images_update on storage.objects;
 create policy cn_images_update on storage.objects for update to authenticated
-  using (bucket_id = 'board-images' and private.is_board_owner(private.board_id_from_path(name)))
-  with check (bucket_id = 'board-images' and private.is_board_owner(private.board_id_from_path(name)));
+  using (bucket_id = 'board-images' and private.can_write_image(name))
+  with check (bucket_id = 'board-images' and private.can_write_image(name));
 drop policy if exists cn_images_delete on storage.objects;
 create policy cn_images_delete on storage.objects for delete to authenticated
-  using (bucket_id = 'board-images' and private.is_board_owner(private.board_id_from_path(name)));
+  using (bucket_id = 'board-images' and private.can_write_image(name));
 
 -- ---------------------------------------------------------------------
 -- Aufräumen: frühere Fassungen der Hilfsfunktionen im öffentlichen Schema entfernen
